@@ -1,10 +1,10 @@
-import requests
+import request
 import time
 import json
 import os
 
 BASE_URL = "https://collectionapi.metmuseum.org/public/collection/v1"
-OUTPUT_FILE = "raw_met_artworks.json"
+OUTPUT_FILE = "met_artworks.json"
 PROGRESS_FILE = "progress.json"
 
 
