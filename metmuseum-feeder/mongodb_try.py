@@ -10,6 +10,7 @@ client = MongoClient(MONGO_URI)
 db = client["artemis_db"]
 artworks_collection = db["artworks"]
 procesados_collection = db["procesados"]
+status_collection = db["status"]
 
 
 def get_all_object_ids():
@@ -71,6 +72,7 @@ def main():
         return
 
     batch_artworks = []
+    batch_status = []
     guardados_hoy = 0
 
     for i, object_id in enumerate(ids_pendientes):
@@ -86,26 +88,30 @@ def main():
             )
 
             batch_artworks.append(obra.to_dict())
+            batch_status.append({"objectId": object_id, "status": "PENDING_WIKIPEDIA"})
             guardados_hoy += 1
 
             print(f"[+] ({i+1}/{total}) Cuadro {object_id} guardado")
         else:
             print(f"[-] ({i+1}/{total}) Cuadro {object_id} sin imagen")
 
-        if (i + 1) % 50 == 0:
+        if (i + 1) % 20 == 0:
 
             if batch_artworks:
                 artworks_collection.insert_many(batch_artworks)
+                status_collection.insert_many(batch_status)
 
             update_last_processed_id(object_id)
 
             print(f">>> Progreso guardado. Obras con imagen hoy: {guardados_hoy}")
 
             batch_artworks = []
+            batch_status = []
 
     if batch_artworks:
         artworks_collection.insert_many(batch_artworks)
-
+        status_collection.insert_many(batch_status)
+    
     update_last_processed_id(ids_pendientes[-1])
 
     print(">>> Proceso terminado")
