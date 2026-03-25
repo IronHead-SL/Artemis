@@ -1,10 +1,16 @@
+import os
 import requests
 import time
+
+import json
 from pymongo import MongoClient
 from artwork import Artwork
 
 BASE_URL = "https://collectionapi.metmuseum.org/public/collection/v1"
 MONGO_URI = "mongodb://localhost:27017/"
+OBJECT_IDS_JSON = 'object_ids.json'
+BATCH_SIZE = 100
+
 
 client = MongoClient(MONGO_URI)
 db = client["artemis_db"]
@@ -14,16 +20,26 @@ status_collection = db["status"]
 
 
 def get_all_object_ids():
-    print("Obteniendo la lista de obras del museo...")
+    if os.path.exists(OBJECT_IDS_JSON):
+        with open(OBJECT_IDS_JSON, 'r') as f:
+            data = json.load(f)
+            print(f"IDs cargados desde {OBJECT_IDS_JSON}")
+            return data["objectIDs"]
+    
+    print(f"{OBJECT_IDS_JSON} no encontrado. Descargando desde la API...")
     response = requests.get(f"{BASE_URL}/objects")
     response.raise_for_status()
     data = response.json()
+
+    with open(OBJECT_IDS_JSON, 'w') as f:
+        json.dump(data, f)
+    
     print(f"Encontradas {data['total']} obras posibles.")
     return data["objectIDs"]
 
 
 def fetch_artwork(object_id):
-    time.sleep(1.2)
+    time.sleep(0.5)
     try:
         response = requests.get(f"{BASE_URL}/objects/{object_id}", timeout=10)
         response.raise_for_status()
@@ -53,8 +69,14 @@ def update_last_processed_id(last_id):
         upsert=True
     )
 
+def setup_database():
+    artworks_collection.create_index("objectID", unique=True)
+    status_collection.create_index([("status", 1), ("objectId", 1)])
+
+
 
 def main():
+    setup_database()
     all_ids = get_all_object_ids()
 
     print("Consultando progreso...")
@@ -84,7 +106,13 @@ def main():
                 object_id=raw_data["objectID"],
                 title=raw_data.get("title", "Unknown"),
                 constituents=raw_data.get("constituents"),
-                image_url=raw_data["primaryImage"]
+                image_url=raw_data["primaryImage"],
+                department=raw_data.get("department", ""),
+                medium=raw_data.get("medium", ""),
+                artist_display_name=raw_data.get("artistDisplayName", ""),
+                object_wikidata_url=raw_data.get("objectWikidata_URL", ""),
+                artist_wikidata_url=raw_data.get("artistWikidata_URL", ""),
+                object_date=raw_data.get("objectDate", ""),
             )
 
             batch_artworks.append(obra.to_dict())
@@ -95,11 +123,11 @@ def main():
         else:
             print(f"[-] ({i+1}/{total}) Cuadro {object_id} sin imagen")
 
-        if (i + 1) % 20 == 0:
+        if (i + 1) % BATCH_SIZE == 0:
 
             if batch_artworks:
-                artworks_collection.insert_many(batch_artworks)
-                status_collection.insert_many(batch_status)
+                artworks_collection.insert_many(batch_artworks, ordered=False)
+                status_collection.insert_many(batch_status, ordered=False)
 
             update_last_processed_id(object_id)
 
@@ -109,9 +137,9 @@ def main():
             batch_status = []
 
     if batch_artworks:
-        artworks_collection.insert_many(batch_artworks)
-        status_collection.insert_many(batch_status)
-    
+        artworks_collection.insert_many(batch_artworks, ordered=False)
+        status_collection.insert_many(batch_status, ordered=False)
+
     update_last_processed_id(ids_pendientes[-1])
 
     print(">>> Proceso terminado")
