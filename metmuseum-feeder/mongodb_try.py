@@ -7,7 +7,7 @@ from pymongo import MongoClient
 from artwork import Artwork
 
 BASE_URL = "https://collectionapi.metmuseum.org/public/collection/v1"
-MONGO_URI = "mongodb://localhost:27017/"
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@localhost:27017/")
 OBJECT_IDS_JSON = 'object_ids.json'
 BATCH_SIZE = 100
 
@@ -70,7 +70,7 @@ def update_last_processed_id(last_id):
     )
 
 def setup_database():
-    artworks_collection.create_index("objectID", unique=True)
+    artworks_collection.create_index("objectId", unique=True)
     status_collection.create_index([("status", 1), ("objectId", 1)])
 
 

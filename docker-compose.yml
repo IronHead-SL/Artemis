@@ -1,0 +1,21 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: artemis_mongo
+    ports:
+      - "27018:27017"
+    volumes:
+      - ./data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    restart: always
+  met_feeder:
+    build: 
+      context: .
+      dockerfile: ./metmuseum-feeder/Dockerfile
+    container_name: artemis_met_feeder
+    depends_on:
+      - mongodb
+    environment:
+      MONGO_URI: "mongodb://admin:password@mongodb:27017/"

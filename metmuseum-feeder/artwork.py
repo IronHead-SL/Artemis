@@ -23,7 +23,6 @@ class Artwork:
             "objectWikidataUrl": self.object_wikidata_url,
             "artistWikidataUrl": self.artist_wikidata_url,
             "objectDate": self.object_date,
-            "objectUrl": self.object_url
         }
 
     @classmethod
