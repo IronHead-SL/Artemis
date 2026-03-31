@@ -13,18 +13,18 @@ def main():
     setup_database()
     all_ids = get_all_object_ids()
 
-    print("Consultando progreso...")
+    print("Checking progress...")
     last_id = get_last_processed_id()
 
     ids_pendientes = [oid for oid in all_ids if oid > last_id]
     ids_pendientes.sort()
 
     total = len(ids_pendientes)
-    print(f"Último ID procesado: {last_id}")
-    print(f"Faltan {total} por revisar")
+    print(f"Last processed ID: {last_id}")
+    print(f"Remaining: {total}")
 
     if total == 0:
-        print("Todo procesado.")
+        print("All processed.")
         return
 
     batch_artworks = []
@@ -53,9 +53,9 @@ def main():
             batch_status.append({"objectId": object_id, "status": "PENDING_WIKIPEDIA"})
             guardados_hoy += 1
 
-            print(f"[+] ({i+1}/{total}) Cuadro {object_id} guardado")
+            print(f"[+] ({i+1}/{total}) Artwork {object_id} saved")
         else:
-            print(f"[-] ({i+1}/{total}) Cuadro {object_id} sin imagen")
+            print(f"[-] ({i+1}/{total}) Artwork {object_id} has no image")
 
         if (i + 1) % BATCH_SIZE == 0:
 
@@ -65,7 +65,7 @@ def main():
 
             update_last_processed_id(object_id)
 
-            print(f">>> Progreso guardado. Obras con imagen hoy: {guardados_hoy}")
+            print(f">>> Progress saved. Artworks with image today: {guardados_hoy}")
 
             batch_artworks = []
             batch_status = []
@@ -76,7 +76,7 @@ def main():
 
     update_last_processed_id(ids_pendientes[-1])
 
-    print(">>> Proceso terminado")
+    print(">>> Process completed")
 
 
 if __name__ == "__main__":

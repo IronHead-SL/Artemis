@@ -1,10 +1,12 @@
 [project]
 name = "artemis"
 version = "0.1.0"
-description = "Add your description here"
+description = "Museum collection enrichment pipeline — Met API → MongoDB → Wikidata → Neo4j"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pymongo>=4.16.0",
+    "neo4j>=5.0.0",
+    "SPARQLWrapper>=2.0.0",
     "requests>=2.32.5",
 ]
