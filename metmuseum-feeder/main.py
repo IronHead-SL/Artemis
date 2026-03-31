@@ -1,78 +1,12 @@
-import os
-import requests
-import time
-
-import json
-from pymongo import MongoClient
 from artwork import Artwork
-
-BASE_URL = "https://collectionapi.metmuseum.org/public/collection/v1"
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@localhost:27017/")
-OBJECT_IDS_JSON = 'object_ids.json'
-BATCH_SIZE = 100
-
-
-client = MongoClient(MONGO_URI)
-db = client["artemis_db"]
-artworks_collection = db["artworks"]
-procesados_collection = db["procesados"]
-status_collection = db["status"]
-
-
-def get_all_object_ids():
-    if os.path.exists(OBJECT_IDS_JSON):
-        with open(OBJECT_IDS_JSON, 'r') as f:
-            data = json.load(f)
-            print(f"IDs cargados desde {OBJECT_IDS_JSON}")
-            return data["objectIDs"]
-    
-    print(f"{OBJECT_IDS_JSON} no encontrado. Descargando desde la API...")
-    response = requests.get(f"{BASE_URL}/objects")
-    response.raise_for_status()
-    data = response.json()
-
-    with open(OBJECT_IDS_JSON, 'w') as f:
-        json.dump(data, f)
-    
-    print(f"Encontradas {data['total']} obras posibles.")
-    return data["objectIDs"]
-
-
-def fetch_artwork(object_id):
-    time.sleep(0.5)
-    try:
-        response = requests.get(f"{BASE_URL}/objects/{object_id}", timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        if not data.get("primaryImage"):
-            return None
-
-        return data
-
-    except Exception as e:
-        print(f"Error en ID {object_id}: {e}")
-        return None
-
-
-def get_last_processed_id():
-    tracker = procesados_collection.find_one({"_id": "tracker"})
-    if tracker:
-        return tracker["last_id"]
-    return 0
-
-
-def update_last_processed_id(last_id):
-    procesados_collection.update_one(
-        {"_id": "tracker"},
-        {"$set": {"last_id": last_id}},
-        upsert=True
-    )
-
-def setup_database():
-    artworks_collection.create_index("objectId", unique=True)
-    status_collection.create_index([("status", 1), ("objectId", 1)])
-
+from mongo_client_constants import BATCH_SIZE, status_collection, artworks_collection
+from fetch import fetch_artwork
+from database_processing import (
+    setup_database,
+    get_last_processed_id,
+    update_last_processed_id,
+    get_all_object_ids
+)
 
 
 def main():
