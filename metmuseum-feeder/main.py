@@ -1,83 +1,51 @@
-from artwork import Artwork
-from mongo_client_constants import BATCH_SIZE, status_collection, artworks_collection
-from fetch import fetch_artwork
-from database_processing import (
-    setup_database,
-    get_last_processed_id,
-    update_last_processed_id,
-    get_all_object_ids
-)
-
+from met_adapter import MetMuseumAdapter
+from repository import ArtworkRepository
+from artwork import ArtworkBuilder
+from config import Config
 
 def main():
-    setup_database()
-    all_ids = get_all_object_ids()
+    repo = ArtworkRepository()
+    api = MetMuseumAdapter()
+    builder = ArtworkBuilder()
+    repo.init_indexes()
 
-    print("Checking progress...")
-    last_id = get_last_processed_id()
-
-    ids_pendientes = [oid for oid in all_ids if oid > last_id]
-    ids_pendientes.sort()
-
-    total = len(ids_pendientes)
-    print(f"Last processed ID: {last_id}")
-    print(f"Remaining: {total}")
-
-    if total == 0:
-        print("All processed.")
-        return
+    all_ids = api.get_available_ids()
+    last_id = repo.get_last_processed_id()
+    
+    pending_ids = sorted([oid for oid in all_ids if oid > last_id])
+    print(f"Procesando desde {last_id}. Pendientes: {len(pending_ids)}")
 
     batch_artworks = []
     batch_status = []
-    guardados_hoy = 0
 
-    for i, object_id in enumerate(ids_pendientes):
-
-        raw_data = fetch_artwork(object_id)
-
-        if raw_data:
-            obra = Artwork(
-                object_id=raw_data["objectID"],
-                title=raw_data.get("title", "Unknown"),
-                constituents=raw_data.get("constituents"),
-                image_url=raw_data["primaryImage"],
-                department=raw_data.get("department", ""),
-                medium=raw_data.get("medium", ""),
-                artist_display_name=raw_data.get("artistDisplayName", ""),
-                object_wikidata_url=raw_data.get("objectWikidata_URL", ""),
-                artist_wikidata_url=raw_data.get("artistWikidata_URL", ""),
-                object_date=raw_data.get("objectDate", ""),
-            )
+    for i, oid in enumerate(pending_ids):
+        raw = api.fetch_artwork_data(oid)
+        
+        if raw:
+            obra = (builder
+                    .set_basic_info(raw["objectID"], raw.get("title"), raw["primaryImage"])
+                    .set_metadata(raw.get("department"), raw.get("medium"), raw.get("objectDate"))
+                    .set_artist_info(raw.get("artistDisplayName"), 
+                                     raw.get("artistWikidata_URL"), 
+                                     raw.get("objectWikidata_URL"))
+                    .set_constituents(raw.get("constituents"))
+                    .build())
 
             batch_artworks.append(obra.to_dict())
-            batch_status.append({"objectId": object_id, "status": "PENDING_WIKIPEDIA"})
-            guardados_hoy += 1
+            batch_status.append({"objectId": oid, "status": "PENDING_WIKIPEDIA"})
+            print(f"[+] {oid} ok")
 
-            print(f"[+] ({i+1}/{total}) Artwork {object_id} saved")
-        else:
-            print(f"[-] ({i+1}/{total}) Artwork {object_id} has no image")
-
-        if (i + 1) % BATCH_SIZE == 0:
-
-            if batch_artworks:
-                artworks_collection.insert_many(batch_artworks, ordered=False)
-                status_collection.insert_many(batch_status, ordered=False)
-
-            update_last_processed_id(object_id)
-
-            print(f">>> Progress saved. Artworks with image today: {guardados_hoy}")
-
-            batch_artworks = []
-            batch_status = []
+        if (i + 1) % Config.BATCH_SIZE == 0:
+            repo.persist_batch(batch_artworks, batch_status)
+            repo.update_tracker(oid)
+            print(f"Batch guardado en ID: {oid}")
+            batch_artworks, batch_status = [], []
 
     if batch_artworks:
-        artworks_collection.insert_many(batch_artworks, ordered=False)
-        status_collection.insert_many(batch_status, ordered=False)
+        repo.persist_batch(batch_artworks, batch_status)
+        repo.update_tracker(pending_ids[-1])
 
-    update_last_processed_id(ids_pendientes[-1])
-
-    print(">>> Process completed")
-
+    print("Proceso finalizado con éxito.")
 
 if __name__ == "__main__":
     main()
