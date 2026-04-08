@@ -1,10 +1,16 @@
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
-REQUEST_DELAY = 1.0
-USER_AGENT = "ArtemisMuseumBot/1.0 (https://github.com/yourrepo/artemis)"
+REQUEST_DELAY   = 1.2   # seconds — stay well within Wikidata rate limits
+MAX_RETRIES     = 3
+USER_AGENT      = "ArtemisMuseumBot/1.0 (https://github.com/yourrepo/artemis)"
 
 
-# Queries
+# ──────────────────────────────────────────────────────────────────────────────
+# SPARQL Queries
+# ──────────────────────────────────────────────────────────────────────────────
 
+# NOTE: double-braces {{ }} are Python-escaped literals for .format()
+# The wikibase:label service auto-generates ?xLabel for any ?x bound to a QID,
+# plus the explicit wd:{wid} rdfs:label ?name for the subject's own label.
 
 ARTIST_QUERY = """
 SELECT DISTINCT
@@ -14,9 +20,9 @@ SELECT DISTINCT
     ?genderLabel
     ?occupationLabel
     ?nationalityLabel
-    ?movement    ?movementLabel
-    ?influencedBy ?influencedByLabel
-    ?studiedAt   ?studiedAtLabel
+    ?movement        ?movementLabel
+    ?influencedBy    ?influencedByLabel
+    ?studiedAt       ?studiedAtLabel
 WHERE {{
     OPTIONAL {{ wd:{wid} wdt:P569 ?birthDate. }}
     OPTIONAL {{ wd:{wid} wdt:P570 ?deathDate. }}
@@ -28,13 +34,17 @@ WHERE {{
     OPTIONAL {{ wd:{wid} wdt:P69  ?studiedAt. }}
     SERVICE wikibase:label {{
         bd:serviceParam wikibase:language "en,es,fr,de".
-        wd:{wid} rdfs:label ?name.
+        wd:{wid}        rdfs:label ?name.
+        ?gender         rdfs:label ?genderLabel.
+        ?occupation     rdfs:label ?occupationLabel.
+        ?nationality    rdfs:label ?nationalityLabel.
+        ?movement       rdfs:label ?movementLabel.
+        ?influencedBy   rdfs:label ?influencedByLabel.
+        ?studiedAt      rdfs:label ?studiedAtLabel.
     }}
 }}
 LIMIT 50
 """
-
-
 
 ARTWORK_QUERY = """
 SELECT DISTINCT
@@ -51,6 +61,10 @@ WHERE {{
     OPTIONAL {{ wd:{wid} wdt:P571 ?inception. }}
     SERVICE wikibase:label {{
         bd:serviceParam wikibase:language "en,es,fr,de".
+        ?genre      rdfs:label ?genreLabel.
+        ?movement   rdfs:label ?movementLabel.
+        ?depicts    rdfs:label ?depictsLabel.
+        ?creator    rdfs:label ?creatorLabel.
     }}
 }}
 LIMIT 50

@@ -1,44 +1,53 @@
-from constants import ARTIST_QUERY, ARTWORK_QUERY
-import query_runner
-from wikidata_extractor import extract_wikidata_id
+import logging
+
+from utils.query.queries_constants import ARTIST_QUERY, ARTWORK_QUERY
+from utils.query.query_runner import _run_query
+from utils.extractor import extract_wikidata_id
+
+logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Artist
+# ──────────────────────────────────────────────────────────────────────────────
 
 def fetch_artist_data(wikidata_id: str) -> dict:
     """
     Query Wikidata for contextual information about an artist.
 
     Returns a dict with keys:
-        name              : str
-        birthDate         : str | None
-        deathDate         : str | None
+        name              : str | None
+        birthDate         : str | None   (YYYY-MM-DD)
+        deathDate         : str | None   (YYYY-MM-DD)
         genderLabel       : str | None
         occupationLabel   : str | None
-        nationalities     : list of str
-        movements         : list of {'label': str}
-        influenced_by     : list of {'id': str, 'label': str}
-        institutions      : list of str
+        nationalities     : list[str]
+        movements         : list[{'label': str}]
+        influenced_by     : list[{'id': str, 'label': str}]
+        institutions      : list[str]
     """
     query = ARTIST_QUERY.format(wid=wikidata_id)
-    rows = query_runner._run_query(query)
+    rows  = _run_query(query)
 
     result: dict = {
-        "name": None,
-        "birthDate": None,
-        "deathDate": None,
-        "genderLabel": None,
+        "name":            None,
+        "birthDate":       None,
+        "deathDate":       None,
+        "genderLabel":     None,
         "occupationLabel": None,
-        "nationalities": [],
-        "movements": [],
-        "influenced_by": [],
-        "institutions": [],
+        "nationalities":   [],
+        "movements":       [],
+        "influenced_by":   [],
+        "institutions":    [],
     }
 
     seen_nationalities: set = set()
-    seen_movements: set = set()
-    seen_influenced: set = set()
-    seen_institutions: set = set()
+    seen_movements:     set = set()
+    seen_influenced:    set = set()
+    seen_institutions:  set = set()
 
     for row in rows:
-        # Scalar fields — take first non-null value
+        # ── Scalar fields: keep first non-null value ───────────────────────
         if result["name"] is None:
             result["name"] = row.get("name", {}).get("value")
 
@@ -54,9 +63,10 @@ def fetch_artist_data(wikidata_id: str) -> dict:
         if result["occupationLabel"] is None and "occupationLabel" in row:
             result["occupationLabel"] = row["occupationLabel"]["value"]
 
+        # ── Multi-value fields ─────────────────────────────────────────────
         if "nationalityLabel" in row:
             label = row["nationalityLabel"]["value"]
-            if label not in seen_nationalities:
+            if label and label not in seen_nationalities:
                 seen_nationalities.add(label)
                 result["nationalities"].append(label)
 
@@ -67,7 +77,7 @@ def fetch_artist_data(wikidata_id: str) -> dict:
                 result["movements"].append({"label": mlabel})
 
         if "influencedBy" in row:
-            iid = extract_wikidata_id(row["influencedBy"]["value"])
+            iid    = extract_wikidata_id(row["influencedBy"]["value"])
             ilabel = row.get("influencedByLabel", {}).get("value", "")
             if iid and iid not in seen_influenced:
                 seen_influenced.add(iid)
@@ -82,36 +92,40 @@ def fetch_artist_data(wikidata_id: str) -> dict:
     return result
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Artwork
+# ──────────────────────────────────────────────────────────────────────────────
+
 def fetch_artwork_data(wikidata_id: str) -> dict:
     """
     Query Wikidata for contextual information about an artwork.
 
     Returns a dict with keys:
-        genres      : list of {'id': str, 'label': str}
-        movements   : list of {'label': str}
-        depicts     : list of {'id': str, 'label': str}
-        creators    : list of {'id': str, 'label': str}
-        inception   : str | None
+        genres      : list[{'id': str, 'label': str}]
+        movements   : list[{'label': str}]
+        depicts     : list[{'id': str, 'label': str}]
+        creators    : list[{'id': str, 'label': str}]
+        inception   : str | None   (YYYY-MM-DD)
     """
     query = ARTWORK_QUERY.format(wid=wikidata_id)
-    rows = query_runner._run_query(query)
+    rows  = _run_query(query)
 
     result: dict = {
-        "genres": [],
+        "genres":    [],
         "movements": [],
-        "depicts": [],
-        "creators": [],
+        "depicts":   [],
+        "creators":  [],
         "inception": None,
     }
 
-    seen_genres: set = set()
-    seen_movements: set = set()
-    seen_depicts: set = set()
-    seen_creators: set = set()
+    seen_genres:     set = set()
+    seen_movements:  set = set()
+    seen_depicts:    set = set()
+    seen_creators:   set = set()
 
     for row in rows:
         if "genre" in row:
-            gid = extract_wikidata_id(row["genre"]["value"])
+            gid    = extract_wikidata_id(row["genre"]["value"])
             glabel = row.get("genreLabel", {}).get("value", "")
             if gid and glabel and glabel not in seen_genres:
                 seen_genres.add(glabel)
@@ -124,14 +138,14 @@ def fetch_artwork_data(wikidata_id: str) -> dict:
                 result["movements"].append({"label": mlabel})
 
         if "depicts" in row:
-            did = extract_wikidata_id(row["depicts"]["value"])
+            did    = extract_wikidata_id(row["depicts"]["value"])
             dlabel = row.get("depictsLabel", {}).get("value", "")
             if did and dlabel and did not in seen_depicts:
                 seen_depicts.add(did)
                 result["depicts"].append({"id": did, "label": dlabel})
 
         if "creator" in row:
-            cid = extract_wikidata_id(row["creator"]["value"])
+            cid    = extract_wikidata_id(row["creator"]["value"])
             clabel = row.get("creatorLabel", {}).get("value", "")
             if cid and cid not in seen_creators:
                 seen_creators.add(cid)

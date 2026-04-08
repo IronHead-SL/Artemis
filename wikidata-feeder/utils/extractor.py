@@ -1,9 +1,12 @@
 import logging
-from utils.queries_constants import *
 
 logger = logging.getLogger(__name__)
 
 def extract_wikidata_id(url: str) -> str | None:
+    """Extract the QID (e.g. 'Q762') from a full Wikidata entity URL."""
     if not url:
         return None
-    return url.rstrip("/").split("/")[-1]
+    qid = url.rstrip("/").split("/")[-1]
+    if qid.startswith("Q") and qid[1:].isdigit():
+        return qid
+    return None
