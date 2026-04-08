@@ -1,10 +1,12 @@
-from met_adapter import MetMuseumAdapter
-from repository import ArtworkRepository
-from artwork import ArtworkBuilder
+from domain.artwork import ArtworkBuilder
+from infrastructure.adapters.met_adapter import MetMuseumAdapter
+from infrastructure.adapters.database import MongoConnection
+from infrastructure.adapters.repository import ArtworkRepository
 from config import Config
 
 def main():
-    repo = ArtworkRepository()
+    database_instance = MongoConnection().db
+    repo = ArtworkRepository(database_instance)
     api = MetMuseumAdapter()
     builder = ArtworkBuilder()
     repo.init_indexes()

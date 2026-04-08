@@ -3,7 +3,7 @@ import time
 import json
 import os
 from config import Config
-from artwork_provider import ArtworkProvider
+from infrastructure.ports.artwork_provider import ArtworkProvider
 
 class MetMuseumAdapter(ArtworkProvider):
     def __init__(self):

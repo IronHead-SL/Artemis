@@ -1,8 +1,9 @@
-from database import MongoConnection
+from infrastructure.adapters.database import MongoConnection
+from infrastructure.ports.artwork_store import ArtworkStore
 
-class ArtworkRepository:
-    def __init__(self):
-        self.db = MongoConnection().db
+class ArtworkRepository(ArtworkStore):
+    def __init__(self, db_instance):
+        self.db = db_instance
         self.artworks = self.db["artworks"]
         self.status = self.db["status"]
         self.tracker = self.db["procesados"]
