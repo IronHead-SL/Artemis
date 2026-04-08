@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@localhost:27017/")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@localhost:27018/")
 MONGO_DB  = os.getenv("MONGO_DB",  "artemis_db")
 
 

@@ -1,8 +1,7 @@
 import time
 import logging
 from urllib.error import URLError, HTTPError
-
-from queries_constants import *
+from utils.query.queries_constants import *
 from utils.builder import _build_sparql
 
 logger = logging.getLogger(__name__)

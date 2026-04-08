@@ -6,7 +6,8 @@ RUN pip install uv
 
 COPY pyproject.toml uv.lock ./
 
-RUN uv export --format requirements-txt > req.txt && pip install --no-cache-dir -r req.txt
+RUN uv export --no-emit-project --no-hashes --format requirements-txt > req.txt && \
+    pip install --no-cache-dir -r req.txt
 
 COPY metmuseum-feeder/ ./
 

@@ -1,5 +1,5 @@
 from SPARQLWrapper import SPARQLWrapper, JSON
-from .constants import SPARQL_ENDPOINT, USER_AGENT
+from utils.query.queries_constants import SPARQL_ENDPOINT, USER_AGENT
 
 
 def _build_sparql() -> SPARQLWrapper:
