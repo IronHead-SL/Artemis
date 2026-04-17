@@ -1,5 +1,4 @@
 import logging
-from neo4j import Session  # neo4j driver package
 from neo4j.exceptions import ClientError
 
 logger = logging.getLogger(__name__)

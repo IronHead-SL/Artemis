@@ -1,10 +1,10 @@
 import logging
 from pymongo.collection import Collection
 
-from utils.fetch_data import *
-from utils.extractor import extract_wikidata_id
-from neo4j_client import Neo4jClient
-from cache.ArtistCache import ArtistCache
+from infrastructure.wikidata.fetcher import fetch_artist_data, fetch_artwork_data
+from domain.wikidata_id import extract_wikidata_id
+from infrastructure.neo4j.client import Neo4jClient
+from infrastructure.neo4j.artist_cache import ArtistCache
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +26,7 @@ class Enricher:
         self.neo4j    = neo4j
         self._cache   = ArtistCache(neo4j.driver)
 
-    # ── Public entry point ────────────────────────────────────────────────────
-
     def run(self, batch_size: int = 50) -> int:
-        """
-        Process artworks with status PENDING_WIKIPEDIA.
-        Returns the count of artworks successfully enriched.
-        """
         pending = list(
             self.status.find({"status": STATUS_PENDING}).limit(batch_size)
         )
@@ -42,7 +36,6 @@ class Enricher:
 
         logger.info(f"Enriching batch of {len(pending)} artworks...")
 
-        # Prefetch artist cache for the whole batch in one Neo4j round-trip
         object_ids  = [r["objectId"] for r in pending]
         artist_wids = self._collect_artist_wids(object_ids)
         self._cache.prefetch(artist_wids)
@@ -63,10 +56,7 @@ class Enricher:
         logger.info(f"Batch complete: {enriched}/{len(pending)} enriched.")
         return enriched
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
     def _collect_artist_wids(self, object_ids: list) -> list[str]:
-        """Pull all artistWikidataUrl values for the batch from MongoDB."""
         docs = self.artworks.find(
             {"objectId": {"$in": object_ids}},
             {"artistWikidataUrl": 1, "_id": 0},
@@ -78,10 +68,7 @@ class Enricher:
                 wids.append(wid)
         return wids
 
-    # ── Per-artwork logic ─────────────────────────────────────────────────────
-
     def _enrich_one(self, object_id: int) -> None:
-        # 1. Fetch MongoDB document
         artwork_doc = self.artworks.find_one({"objectId": object_id})
         if not artwork_doc:
             logger.warning(f"objectId={object_id} not found in artworks collection.")
@@ -96,10 +83,8 @@ class Enricher:
 
         logger.info(f"Enriching objectId={object_id} ({artwork_wid})...")
 
-        # 2. Fetch artwork context from Wikidata
         artwork_wd = fetch_artwork_data(artwork_wid)
 
-        # 3. Write everything inside ONE Neo4j session
         with self.neo4j.driver.session() as session:
 
             self.neo4j.upsert_artwork(session, {
@@ -123,30 +108,20 @@ class Enricher:
                     session, artwork_wid, concept["id"], concept["label"]
                 )
 
-            # Creators from Wikidata (P170)
             for creator in artwork_wd["creators"]:
                 self._enrich_artist(session, creator["id"], creator["label"])
                 self.neo4j.link_artwork_to_artist(session, artwork_wid, creator["id"])
 
-            # Main artist from MET metadata in MongoDB
             artist_wid = extract_wikidata_id(artwork_doc.get("artistWikidataUrl", ""))
             if artist_wid:
                 fallback = artwork_doc.get("artistDisplayName", "")
                 self._enrich_artist(session, artist_wid, fallback)
                 self.neo4j.link_artwork_to_artist(session, artwork_wid, artist_wid)
 
-        # 4. Mark done in MongoDB
         self._set_status(object_id, STATUS_ENRICHED)
         logger.info(f"OK objectId={object_id} ({artwork_wid}) enriched.")
 
-    # ── Artist enrichment ─────────────────────────────────────────────────────
-
     def _enrich_artist(self, session, artist_wid: str, fallback_name: str = "") -> None:
-        """
-        Fetch full artist context from Wikidata and persist to Neo4j.
-        Skips the Wikidata fetch entirely if the artist is already flagged
-        as enriched in the persistent ArtistCache (survives process restarts).
-        """
         if self._cache.is_enriched(artist_wid):
             logger.debug(f"Artist {artist_wid} already enriched — skipping Wikidata fetch.")
             return
@@ -177,8 +152,6 @@ class Enricher:
             self.neo4j.link_artist_to_institution(session, artist_wid, institution)
 
         self._cache.mark_enriched(artist_wid)
-
-    # ── Status helpers ─────────────────────────────────────────────────────────
 
     def _set_status(self, object_id: int, status: str) -> None:
         self.status.update_one(

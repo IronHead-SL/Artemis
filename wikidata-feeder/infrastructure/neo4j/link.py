@@ -1,9 +1,3 @@
-"""
-Relationship helpers for Neo4j.
- 
-All functions take a live neo4j Session as their first argument.
-They do NOT take `self` — they are pure helpers, not methods.
-"""
 from neo4j import Session
  
  

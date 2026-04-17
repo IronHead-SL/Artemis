@@ -6,8 +6,8 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from pymongo import MongoClient
-from neo4j_client import Neo4jClient
-from enricher import Enricher
+from infrastructure.neo4j.client import Neo4jClient
+from application.enricher import Enricher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,14 +46,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # ── MongoDB ──────────────────────────────────────────────────────────────
     mongo_client       = MongoClient(MONGO_URI)
     db                 = mongo_client[MONGO_DB]
     artworks_col       = db["artworks"]
     status_col         = db["status"]
     logger.info(f"Connected to MongoDB ({MONGO_DB}).")
 
-    # ── Neo4j ────────────────────────────────────────────────────────────────
     neo4j = Neo4jClient()
     neo4j.verify_connection()
     neo4j.setup_constraints()
@@ -64,7 +62,6 @@ def main() -> None:
         mongo_client.close()
         return
 
-    # ── Enricher ─────────────────────────────────────────────────────────────
     enricher = Enricher(
         artworks_collection=artworks_col,
         status_collection=status_col,

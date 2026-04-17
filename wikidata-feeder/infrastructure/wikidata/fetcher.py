@@ -1,15 +1,60 @@
+import time
 import logging
+from urllib.error import URLError, HTTPError
 
-from utils.query.queries_constants import ARTIST_QUERY, ARTWORK_QUERY
-from utils.query.query_runner import _run_query
-from utils.extractor import extract_wikidata_id
+from SPARQLWrapper import SPARQLWrapper, JSON
+
+from infrastructure.wikidata.queries import (
+    SPARQL_ENDPOINT, USER_AGENT,
+    REQUEST_DELAY, MAX_RETRIES,
+    ARTIST_QUERY, ARTWORK_QUERY,
+)
+from domain.wikidata_id import extract_wikidata_id
 
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Artist
-# ──────────────────────────────────────────────────────────────────────────────
+def _build_sparql() -> SPARQLWrapper:
+    sparql = SPARQLWrapper(SPARQL_ENDPOINT, agent=USER_AGENT)
+    sparql.setReturnFormat(JSON)
+    return sparql
+
+
+def _run_query(query: str) -> list[dict]:
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            sparql = _build_sparql()
+            sparql.setQuery(query)
+            time.sleep(REQUEST_DELAY)
+            results = sparql.query().convert()
+            return results["results"]["bindings"]
+
+        except HTTPError as e:
+            if e.code in (429, 503):
+                wait = REQUEST_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"Wikidata HTTP {e.code} — backing off {wait:.1f}s "
+                    f"(attempt {attempt}/{MAX_RETRIES})"
+                )
+                time.sleep(wait)
+            else:
+                logger.error(f"Wikidata HTTP error {e.code}: {e}")
+                return []
+
+        except URLError as e:
+            wait = REQUEST_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Network error querying Wikidata: {e} — "
+                f"retrying in {wait:.1f}s (attempt {attempt}/{MAX_RETRIES})"
+            )
+            time.sleep(wait)
+
+        except Exception as e:
+            logger.error(f"Unexpected SPARQL error: {e}")
+            return []
+
+    logger.error(f"Wikidata query failed after {MAX_RETRIES} attempts.")
+    return []
 
 def fetch_artist_data(wikidata_id: str) -> dict:
     """
@@ -47,7 +92,6 @@ def fetch_artist_data(wikidata_id: str) -> dict:
     seen_institutions:  set = set()
 
     for row in rows:
-        # ── Scalar fields: keep first non-null value ───────────────────────
         if result["name"] is None:
             result["name"] = row.get("name", {}).get("value")
 
@@ -63,7 +107,6 @@ def fetch_artist_data(wikidata_id: str) -> dict:
         if result["occupationLabel"] is None and "occupationLabel" in row:
             result["occupationLabel"] = row["occupationLabel"]["value"]
 
-        # ── Multi-value fields ─────────────────────────────────────────────
         if "nationalityLabel" in row:
             label = row["nationalityLabel"]["value"]
             if label and label not in seen_nationalities:
@@ -90,11 +133,6 @@ def fetch_artist_data(wikidata_id: str) -> dict:
                 result["institutions"].append(label)
 
     return result
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Artwork
-# ──────────────────────────────────────────────────────────────────────────────
 
 def fetch_artwork_data(wikidata_id: str) -> dict:
     """

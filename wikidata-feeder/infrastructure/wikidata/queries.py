@@ -1,16 +1,7 @@
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
-REQUEST_DELAY   = 1.2   # seconds — stay well within Wikidata rate limits
+REQUEST_DELAY   = 1.2
 MAX_RETRIES     = 3
 USER_AGENT      = "ArtemisMuseumBot/1.0 (https://github.com/yourrepo/artemis)"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# SPARQL Queries
-# ──────────────────────────────────────────────────────────────────────────────
-
-# NOTE: double-braces {{ }} are Python-escaped literals for .format()
-# The wikibase:label service auto-generates ?xLabel for any ?x bound to a QID,
-# plus the explicit wd:{wid} rdfs:label ?name for the subject's own label.
 
 ARTIST_QUERY = """
 SELECT DISTINCT
