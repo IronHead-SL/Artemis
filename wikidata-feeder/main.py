@@ -7,7 +7,11 @@ import time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from pymongo import MongoClient
+
+from infrastructure.adapters.mongo.repository import ArtworkRepository
 from infrastructure.adapters.neo4j.client import Neo4jClient
+import infrastructure.adapters.wikidata.fetcher as wikidata_adapter
+
 from application.enricher import Enricher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
@@ -28,6 +32,7 @@ def main() -> None:
 
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[MONGO_DB]
+    mongo_repo = ArtworkRepository(db)
     logger.info(f"Connected to MongoDB ({MONGO_DB}).")
 
     neo4j = Neo4jClient(
@@ -44,7 +49,11 @@ def main() -> None:
         mongo_client.close()
         return
 
-    enricher = Enricher(db["artworks"], db["status"], neo4j)
+    enricher = Enricher(
+        repository=mongo_repo, 
+        graph_store=neo4j, 
+        wikidata_adapter=wikidata_adapter
+    )
 
     if args.loop:
         logger.info("Loop mode activated. The feeder will listen indefinitely...")

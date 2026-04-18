@@ -49,3 +49,9 @@ class Neo4jClient(GraphStore):
 
         with self.driver.session() as session:
             session.run(BATCH_UPSERT_QUERY, batch=unwind_data)
+    
+    def is_artist_enriched(self, wid: str) -> bool:
+        return self.cache.is_enriched(wid)
+
+    def prefetch_artists(self, wids: list) -> None:
+        self.cache.prefetch(wids)
