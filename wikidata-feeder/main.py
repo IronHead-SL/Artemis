@@ -11,8 +11,9 @@ from pymongo import MongoClient
 from infrastructure.adapters.mongo.repository import ArtworkRepository
 from infrastructure.adapters.neo4j.client import Neo4jClient
 import infrastructure.adapters.wikidata.fetcher as wikidata_adapter
+import infrastructure.adapters.wikipedia.fetcher as wikipedia_adapter # <-- 1. IMPORTAR
 
-from application.enricher import Enricher
+from application.usecases.enricher import Enricher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 logger = logging.getLogger(__name__)
@@ -49,11 +50,7 @@ def main() -> None:
         mongo_client.close()
         return
 
-    enricher = Enricher(
-        repository=mongo_repo, 
-        graph_store=neo4j, 
-        wikidata_adapter=wikidata_adapter
-    )
+    enricher = Enricher(repository=mongo_repo, graph_store=neo4j, wikidata_adapter=wikidata_adapter,wikipedia_adapter=wikipedia_adapter)
 
     if args.loop:
         logger.info("Loop mode activated. The feeder will listen indefinitely...")

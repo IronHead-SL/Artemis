@@ -4,7 +4,7 @@ from domain.artwork import ArtworkBuilder
 from infrastructure.adapters.met.adapter import MetMuseumAdapter
 from infrastructure.adapters.mongo.database import MongoConnection
 from infrastructure.adapters.mongo.repository import ArtworkRepository
-from application.collector import ArtworkCollector
+from application.usecases.collector import ArtworkCollector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
 
