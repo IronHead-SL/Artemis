@@ -15,11 +15,6 @@ _CONSTRAINTS = [
 
 
 def setup_constraints(driver) -> None:
-    """
-    Create uniqueness constraints and indexes.
-    Must be run once before ingestion.
-    Accepts the raw neo4j Driver object.
-    """
     with driver.session() as session:
         for cypher in _CONSTRAINTS:
             try:

@@ -4,7 +4,7 @@ from urllib.error import URLError, HTTPError
 
 from SPARQLWrapper import SPARQLWrapper, JSON
 
-from infrastructure.wikidata.queries import (
+from infrastructure.adapters.wikidata.queries import (
     SPARQL_ENDPOINT, USER_AGENT,
     REQUEST_DELAY, MAX_RETRIES,
     ARTIST_QUERY, ARTWORK_QUERY,

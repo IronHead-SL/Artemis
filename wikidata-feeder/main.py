@@ -2,57 +2,39 @@ import logging
 import argparse
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from pymongo import MongoClient
-from infrastructure.neo4j.client import Neo4jClient
+from infrastructure.adapters.neo4j.client import Neo4jClient
 from application.enricher import Enricher
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 logger = logging.getLogger(__name__)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@localhost:27018/")
 MONGO_DB  = os.getenv("MONGO_DB",  "artemis_db")
 
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Wikidata → Neo4j enrichment pipeline"
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=50,
-        help="Number of artworks to process per run (default: 50)",
-    )
-    parser.add_argument(
-        "--setup-only",
-        action="store_true",
-        help="Only create Neo4j constraints and exit",
-    )
-    parser.add_argument(
-        "--loop",
-        action="store_true",
-        help="Keep running until no pending artworks remain",
-    )
+    parser = argparse.ArgumentParser(description="Wikidata → Neo4j enrichment pipeline")
+    parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument("--setup-only", action="store_true")
+    parser.add_argument("--loop", action="store_true")
     return parser.parse_args()
-
 
 def main() -> None:
     args = parse_args()
 
-    mongo_client       = MongoClient(MONGO_URI)
-    db                 = mongo_client[MONGO_DB]
-    artworks_col       = db["artworks"]
-    status_col         = db["status"]
+    mongo_client = MongoClient(MONGO_URI)
+    db = mongo_client[MONGO_DB]
     logger.info(f"Connected to MongoDB ({MONGO_DB}).")
 
-    neo4j = Neo4jClient()
+    neo4j = Neo4jClient(
+        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_USER", "neo4j"),
+        password=os.getenv("NEO4J_PASSWORD", "password")
+    )
     neo4j.verify_connection()
     neo4j.setup_constraints()
 
@@ -62,30 +44,29 @@ def main() -> None:
         mongo_client.close()
         return
 
-    enricher = Enricher(
-        artworks_collection=artworks_col,
-        status_collection=status_col,
-        neo4j=neo4j,
-    )
+    enricher = Enricher(db["artworks"], db["status"], neo4j)
 
     if args.loop:
-        logger.info("Loop mode — running until all pending artworks are enriched…")
+        logger.info("Loop mode activated. The feeder will listen indefinitely...")
         total = 0
         while True:
-            pending_count = status_col.count_documents({"status": "PENDING_WIKIPEDIA"})
-            if pending_count == 0:
-                logger.info(f"All artworks enriched (total this run: {total}). Exiting.")
-                break
-            logger.info(f"{pending_count} artworks still pending.")
-            enriched = enricher.run(batch_size=args.batch_size)
-            total += enriched
+            procesados = enricher.run(batch_size=args.batch_size)
+                
+            if procesados == 0:
+                logger.info(f"Queue is empty (Total processed: {total}). Waiting 15 seconds...")
+                time.sleep(15)
+                continue
+                
+            total += procesados
+            logger.info(f"Batch finished. Total accumulated this session: {total}")
+                
     else:
-        enricher.run(batch_size=args.batch_size)
+        procesados = enricher.run(batch_size=args.batch_size)
+        logger.info(f"Single run completed. Total processed: {procesados}")
 
     neo4j.close()
     mongo_client.close()
     logger.info("Done.")
-
 
 if __name__ == "__main__":
     main()
