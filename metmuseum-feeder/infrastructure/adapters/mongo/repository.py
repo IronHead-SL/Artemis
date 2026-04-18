@@ -1,4 +1,4 @@
-from infrastructure.adapters.database import MongoConnection
+from infrastructure.adapters.mongo.database import MongoConnection
 from infrastructure.ports.artwork_store import ArtworkStore
 
 class ArtworkRepository(ArtworkStore):

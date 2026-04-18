@@ -1,53 +1,24 @@
-from domain.artwork import ArtworkBuilder
-from infrastructure.adapters.met_adapter import MetMuseumAdapter
-from infrastructure.adapters.database import MongoConnection
-from infrastructure.adapters.repository import ArtworkRepository
+import logging
 from config import Config
+from domain.artwork import ArtworkBuilder
+from infrastructure.adapters.met.adapter import MetMuseumAdapter
+from infrastructure.adapters.mongo.database import MongoConnection
+from infrastructure.adapters.mongo.repository import ArtworkRepository
+from application.collector import ArtworkCollector
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
 
 def main():
-    database_instance = MongoConnection().db
-    repo = ArtworkRepository(database_instance)
+    db_instance = MongoConnection().db
+    repo = ArtworkRepository(db_instance)
     api = MetMuseumAdapter()
+
     builder = ArtworkBuilder()
-    repo.init_indexes()
-
-    all_ids = api.get_available_ids()
-    last_id = repo.get_last_processed_id()
     
-    pending_ids = sorted([oid for oid in all_ids if oid > last_id])
-    print(f"Procesando desde {last_id}. Pendientes: {len(pending_ids)}")
+    repo.init_indexes()
+    collector = ArtworkCollector(provider=api, store=repo, builder=builder)
 
-    batch_artworks = []
-    batch_status = []
-
-    for i, oid in enumerate(pending_ids):
-        raw = api.fetch_artwork_data(oid)
-        
-        if raw:
-            obra = (builder
-                    .set_basic_info(raw["objectID"], raw.get("title"), raw["primaryImage"])
-                    .set_metadata(raw.get("department"), raw.get("medium"), raw.get("objectDate"))
-                    .set_artist_info(raw.get("artistDisplayName"), 
-                                     raw.get("artistWikidata_URL"), 
-                                     raw.get("objectWikidata_URL"))
-                    .set_constituents(raw.get("constituents"))
-                    .build())
-
-            batch_artworks.append(obra.to_dict())
-            batch_status.append({"objectId": oid, "status": "PENDING_WIKIPEDIA"})
-            print(f"[+] {oid} ok")
-
-        if (i + 1) % Config.BATCH_SIZE == 0:
-            repo.persist_batch(batch_artworks, batch_status)
-            repo.update_tracker(oid)
-            print(f"Batch guardado en ID: {oid}")
-            batch_artworks, batch_status = [], []
-
-    if batch_artworks:
-        repo.persist_batch(batch_artworks, batch_status)
-        repo.update_tracker(pending_ids[-1])
-
-    print("Proceso finalizado con éxito.")
+    collector.run()
 
 if __name__ == "__main__":
     main()
