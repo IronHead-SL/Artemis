@@ -20,7 +20,6 @@ Para levantar el entorno completo, asegúrate de tener instalado **Docker** y **
 1. **Clonar el repositorio:**
    ```bash
    git clone https://github.com/IronHead-SL/Artemis
-   cd artemis
    ```
 
 2. **Levantar los servicios:**
