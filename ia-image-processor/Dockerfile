@@ -9,6 +9,6 @@ COPY pyproject.toml uv.lock ./
 RUN uv export --no-emit-project --no-hashes --format requirements-txt > req.txt && \
     pip install --no-cache-dir -r req.txt
 
-COPY metmuseum-feeder/ ./
+COPY ia-image-processor/ ./
 
 CMD ["python", "-u", "main.py"]
