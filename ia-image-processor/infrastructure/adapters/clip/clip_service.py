@@ -22,7 +22,7 @@ class CLIPService(ModelService):
         
         image_tensor = self.preprocess(image).unsqueeze(0).to(self.device)
         
-        with torch.no_grad(), torch.cuda.amp.autocast('cuda'):
+        with torch.no_grad(), torch.amp.autocast(device_type='cuda'):
             vector = self.model.encode_image(image_tensor)
             vector /= vector.norm(dim=-1, keepdim=True)
             
