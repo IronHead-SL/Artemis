@@ -34,29 +34,39 @@ WHERE {{
         ?studiedAt      rdfs:label ?studiedAtLabel.
     }}
 }}
-LIMIT 50
+LIMIT 20
 """
 
 ARTWORK_QUERY = """
 SELECT DISTINCT
-    ?genre       ?genreLabel
-    ?movement    ?movementLabel
-    ?depicts     ?depictsLabel
-    ?creator     ?creatorLabel
+    ?genre ?genreLabel
+    ?movement ?movementLabel
+    ?depicts ?depictsLabel
     ?inception
+    ?creator ?creatorLabel
+    ?birthDate ?deathDate ?genderLabel ?occLabel
 WHERE {{
-    OPTIONAL {{ wd:{wid} wdt:P136 ?genre. }}
-    OPTIONAL {{ wd:{wid} wdt:P135 ?movement. }}
-    OPTIONAL {{ wd:{wid} wdt:P180 ?depicts. }}
-    OPTIONAL {{ wd:{wid} wdt:P170 ?creator. }}
-    OPTIONAL {{ wd:{wid} wdt:P571 ?inception. }}
+    BIND(wd:{wid} AS ?artwork)
+    OPTIONAL {{ ?artwork wdt:P136 ?genre. }}
+    OPTIONAL {{ ?artwork wdt:P135 ?movement. }}
+    OPTIONAL {{ ?artwork wdt:P180 ?depicts. }}
+    OPTIONAL {{ ?artwork wdt:P571 ?inception. }}
+    OPTIONAL {{ 
+        ?artwork wdt:P170 ?creator. 
+        OPTIONAL {{ ?creator wdt:P569 ?birthDate. }}
+        OPTIONAL {{ ?creator wdt:P570 ?deathDate. }}
+        OPTIONAL {{ ?creator wdt:P21  ?gender. }}
+        OPTIONAL {{ ?creator wdt:P106 ?occ. }}
+    }}
     SERVICE wikibase:label {{
-        bd:serviceParam wikibase:language "en,es,fr,de".
-        ?genre      rdfs:label ?genreLabel.
-        ?movement   rdfs:label ?movementLabel.
-        ?depicts    rdfs:label ?depictsLabel.
-        ?creator    rdfs:label ?creatorLabel.
+        bd:serviceParam wikibase:language "en,es,fr".
+        ?genre rdfs:label ?genreLabel.
+        ?movement rdfs:label ?movementLabel.
+        ?depicts rdfs:label ?depictsLabel.
+        ?creator rdfs:label ?creatorLabel.
+        ?gender rdfs:label ?genderLabel.
+        ?occ rdfs:label ?occLabel.
     }}
 }}
-LIMIT 50
+LIMIT 30
 """

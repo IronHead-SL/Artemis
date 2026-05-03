@@ -18,7 +18,7 @@ class Enricher:
 
     def _fetch_bundle(self, artwork_wid: str, title: str) -> dict:
         artwork_data = self.wiki.fetch_artwork_data(artwork_wid)
-        for creator in artwork_data["creators"]:
+        for creator in artwork_data.get("creators", []):
             if not self.neo4j.is_artist_enriched(creator["id"]):
                 artist_data = self.wiki.fetch_artist_data(creator["id"])
                 creator.update(artist_data)
@@ -29,9 +29,9 @@ class Enricher:
 
     def run(self, batch_size: int = 50) -> int:
         batch = self.repo.get_pending_batch(STATUS_PENDING, batch_size)
-        if not batch: return 0
+        if not batch: 
+            return 0
 
-        # Prefetch de artistas para optimizar Neo4j
         artist_wids = [extract_wikidata_id(doc.get("artistWikidataUrl", "")) for doc in batch]
         self.neo4j.prefetch_artists([w for w in artist_wids if w])
 
@@ -65,18 +65,47 @@ class Enricher:
                     logger.error(f"Error objectId={doc['objectId']}: {e}")
                     error_ids.append(doc["objectId"])
 
-        if enriched_payloads:
+        if not enriched_payloads:
+            if error_ids:
+                self.repo.update_status_batch(error_ids, STATUS_ERROR)
+            if no_wiki_ids:
+                self.repo.update_status_batch(no_wiki_ids, STATUS_NO_WIKIDATA)
+            return 0
+
+        neo4j_success_ids = []
+        neo4j_failed_ids = []
+        
+        neo4j_batch_size = 10
+        for i in range(0, len(enriched_payloads), neo4j_batch_size):
+            micro_batch = enriched_payloads[i:i + neo4j_batch_size]
             try:
-                self.neo4j.upsert_batch(enriched_payloads)
-                
-                self.repo.save_enriched_batch(enriched_payloads, STATUS_ENRICHED)
-                
-                logger.info(f"Batch complete: {len(enriched_payloads)} enriched.")
+                self.neo4j.upsert_batch(micro_batch)
+                neo4j_success_ids.extend([item["mongo_id"] for item in micro_batch])
             except Exception as e:
-                logger.error(f"Persistence Error: {e}")
-                error_ids.extend([item["mongo_id"] for item in enriched_payloads])
+                logger.error(f"Neo4j micro-batch failed: {e}")
+                neo4j_failed_ids.extend([item["mongo_id"] for item in micro_batch])
 
-        if error_ids: self.repo.update_status_batch(error_ids, STATUS_ERROR)
-        if no_wiki_ids: self.repo.update_status_batch(no_wiki_ids, STATUS_NO_WIKIDATA)
+        if not neo4j_success_ids:
+            error_ids.extend(neo4j_failed_ids)
+            self.repo.update_status_batch(error_ids, STATUS_ERROR)
+            return 0
 
-        return len(enriched_payloads)
+        try:
+            success_payloads = [p for p in enriched_payloads if p["mongo_id"] in neo4j_success_ids]
+            self.repo.save_enriched_batch(success_payloads, STATUS_ENRICHED)
+            logger.info(f"Batch complete: {len(success_payloads)} enriched.")
+        except Exception as e:
+            logger.error(f"MongoDB write failed! Rolling back Neo4j... Error: {e}")
+            self.neo4j.delete_artworks(neo4j_success_ids)
+            error_ids.extend(neo4j_success_ids)
+            self.repo.update_status_batch(error_ids, STATUS_ERROR)
+            return 0
+
+        if neo4j_failed_ids:
+            error_ids.extend(neo4j_failed_ids)
+        if error_ids:
+            self.repo.update_status_batch(error_ids, STATUS_ERROR)
+        if no_wiki_ids:
+            self.repo.update_status_batch(no_wiki_ids, STATUS_NO_WIKIDATA)
+
+        return len(neo4j_success_ids)

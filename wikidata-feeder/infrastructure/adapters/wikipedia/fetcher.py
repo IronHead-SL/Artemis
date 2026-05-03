@@ -6,6 +6,10 @@ load_dotenv()
 
 USER_AGENT = f"ArtemisProject/1.0 ({os.getenv('WIKIDATA_EMAIL')})"
 
+_session = requests.Session()
+_session.headers.update({"User-Agent": USER_AGENT})
+
+
 def fetch_extract(title: str) -> str | None:
     if not title:
         return None
@@ -14,10 +18,13 @@ def fetch_extract(title: str) -> str | None:
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{safe_title}"
     
     try:
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=10)
+        response = _session.get(url, timeout=10)
         
         if response.status_code == 200:
             return response.json().get("extract")
+        
+        if response.status_code == 404:
+            return None
             
         return None
     except Exception as e:

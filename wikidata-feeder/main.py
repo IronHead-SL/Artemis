@@ -7,19 +7,37 @@ import time
 sys.path.insert(0, os.path.dirname(__file__))
 
 from pymongo import MongoClient
+from pymongo.errors import ServerSelectionTimeoutError
 
 from infrastructure.adapters.mongo.repository import ArtworkRepository
 from infrastructure.adapters.neo4j.client import Neo4jClient
 import infrastructure.adapters.wikidata.fetcher as wikidata_adapter
-import infrastructure.adapters.wikipedia.fetcher as wikipedia_adapter # <-- 1. IMPORTAR
+import infrastructure.adapters.wikipedia.fetcher as wikipedia_adapter
 
 from application.usecases.enricher import Enricher
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+logging.basicConfig(
+    level=logging.INFO, 
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s", 
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 logger = logging.getLogger(__name__)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:password@localhost:27018/")
-MONGO_DB  = os.getenv("MONGO_DB",  "artemis_db")
+MONGO_DB  = os.getenv("MONGO_DB", "artemis_db")
+
+def wait_for_mongo(max_retries=10, delay=3):
+    """Espera a que MongoDB esté disponible antes de continuar"""
+    for attempt in range(max_retries):
+        try:
+            client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+            client.admin.command("ping")
+            logger.info("MongoDB connection established.")
+            return client
+        except ServerSelectionTimeoutError:
+            logger.warning(f"MongoDB not available, retrying {attempt + 1}/{max_retries}...")
+            time.sleep(delay)
+    raise Exception("MongoDB is not available after maximum retries.")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Wikidata → Neo4j enrichment pipeline")
@@ -31,7 +49,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    mongo_client = MongoClient(MONGO_URI)
+    mongo_client = wait_for_mongo()
     db = mongo_client[MONGO_DB]
     mongo_repo = ArtworkRepository(db)
     logger.info(f"Connected to MongoDB ({MONGO_DB}).")
@@ -50,22 +68,40 @@ def main() -> None:
         mongo_client.close()
         return
 
-    enricher = Enricher(repository=mongo_repo, graph_store=neo4j, wikidata_adapter=wikidata_adapter,wikipedia_adapter=wikipedia_adapter)
+    enricher = Enricher(
+        repository=mongo_repo, 
+        graph_store=neo4j, 
+        wikidata_adapter=wikidata_adapter,
+        wikipedia_adapter=wikipedia_adapter
+    )
 
     if args.loop:
-        logger.info("Loop mode activated. The feeder will listen indefinitely...")
+        logger.info("Loop mode activated. Press Ctrl+C to stop.")
         total = 0
+        empty_count = 0
+        
+    if args.loop:
+        logger.info("Loop mode activated. Press Ctrl+C to stop.")
+        total = 0
+        
         while True:
-            procesados = enricher.run(batch_size=args.batch_size)
+            try:
+                procesados = enricher.run(batch_size=args.batch_size)
                 
-            if procesados == 0:
-                logger.info(f"Queue is empty (Total processed: {total}). Waiting 15 seconds...")
-                time.sleep(15)
-                continue
+                if procesados == 0:
+                    logger.info(f"Queue empty (Total: {total}). Waiting 15 seconds...")
+                    time.sleep(15)
+                    continue
                 
-            total += procesados
-            logger.info(f"Batch finished. Total accumulated this session: {total}")
+                total += procesados
+                logger.info(f"Total accumulated: {total}")
                 
+            except KeyboardInterrupt:
+                logger.info("Interrupted by user.")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error: {e}")
+                time.sleep(5)
     else:
         procesados = enricher.run(batch_size=args.batch_size)
         logger.info(f"Single run completed. Total processed: {procesados}")

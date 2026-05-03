@@ -2,7 +2,13 @@ from domain.wikidata_id import extract_wikidata_id
 from .queries import ARTIST_QUERY, ARTWORK_QUERY
 from .query_runner import execute_sparql_query
 
+_artist_cache: dict[str, dict] = {}
+_artwork_cache: dict[str, dict] = {}
+
 def fetch_artist_data(wikidata_id: str) -> dict:
+    if wikidata_id in _artist_cache:
+        return _artist_cache[wikidata_id]
+    
     rows = execute_sparql_query(ARTIST_QUERY.format(wid=wikidata_id))
     
     result = {
@@ -36,35 +42,53 @@ def fetch_artist_data(wikidata_id: str) -> dict:
             label = row.get("studiedAtLabel", {}).get("value", "")
             if label and label not in seen_inst: seen_inst.add(label); result["institutions"].append(label)
 
+    _artist_cache[wikidata_id] = result
     return result
 
 def fetch_artwork_data(wikidata_id: str) -> dict:
+    if wikidata_id in _artwork_cache:
+        return _artwork_cache[wikidata_id]
+    
     rows = execute_sparql_query(ARTWORK_QUERY.format(wid=wikidata_id))
     
-    result = {"genres": [], "movements": [], "depicts": [], "creators": [], "inception": None}
+    result = {
+        "genres": [], "movements": [], "depicts": [], 
+        "creators": [], "inception": None
+    }
     seen_gen, seen_mov, seen_dep, seen_cre = set(), set(), set(), set()
 
     for row in rows:
-        if "genre" in row:
-            gid = extract_wikidata_id(row["genre"]["value"])
-            glabel = row.get("genreLabel", {}).get("value", "")
-            if gid and glabel and glabel not in seen_gen: seen_gen.add(glabel); result["genres"].append({"id": gid, "label": glabel})
+        if "genreLabel" in row:
+            label = row["genreLabel"]["value"]
+            if label not in seen_gen:
+                seen_gen.add(label)
+                result["genres"].append({"label": label})
 
-        if "movement" in row:
-            mlabel = row.get("movementLabel", {}).get("value", "")
-            if mlabel and mlabel not in seen_mov: seen_mov.add(mlabel); result["movements"].append({"label": mlabel})
-
-        if "depicts" in row:
-            did = extract_wikidata_id(row["depicts"]["value"])
-            dlabel = row.get("depictsLabel", {}).get("value", "")
-            if did and dlabel and did not in seen_dep: seen_dep.add(did); result["depicts"].append({"id": did, "label": dlabel})
+        if "movementLabel" in row:
+            label = row["movementLabel"]["value"]
+            if label not in seen_mov:
+                seen_mov.add(label)
+                result["movements"].append({"label": label})
 
         if "creator" in row:
             cid = extract_wikidata_id(row["creator"]["value"])
-            clabel = row.get("creatorLabel", {}).get("value", "")
-            if cid and cid not in seen_cre: seen_cre.add(cid); result["creators"].append({"id": cid, "label": clabel})
+            if cid and cid not in seen_cre:
+                seen_cre.add(cid)
+                result["creators"].append({
+                    "id": cid,
+                    "name": row.get("creatorLabel", {}).get("value"),
+                    "birthDate": row.get("birthDate", {}).get("value", "")[:10],
+                    "deathDate": row.get("deathDate", {}).get("value", "")[:10],
+                    "genderLabel": row.get("genderLabel", {}).get("value"),
+                    "occupationLabel": row.get("occLabel", {}).get("value"),
+                    "nationalities": [],
+                    "movements": [],
+                    "institutions": [],
+                    "influenced_by": []
+                })
 
         if "inception" in row and result["inception"] is None:
             result["inception"] = row["inception"]["value"][:10]
 
+    _artwork_cache[wikidata_id] = result
     return result
