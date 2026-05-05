@@ -11,7 +11,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     volumes:
-      - neo4j_data:/data
+      - ./mnt/neo4j_data:/data
     healthcheck:
       test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${NEO4J_PASSWORD:-password}", "RETURN 1"]
       interval: 10s
@@ -24,7 +24,7 @@ services:
     ports:
       - "27018:27017"
     volumes:
-      - mongo_data:/data/db
+      - ./mnt/mongo_data:/data/db
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: password
@@ -42,7 +42,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ./mnt/qdrant_data:/qdrant/storage
     restart: always
 
   met_feeder:
@@ -51,7 +51,8 @@ services:
       dockerfile: ./metmuseum-feeder/Dockerfile
     container_name: artemis_met_feeder
     depends_on:
-      - mongodb
+      mongodb:  
+        condition: service_healthy
     environment:
       MONGO_URI: "mongodb://admin:password@mongodb:27017/"
 

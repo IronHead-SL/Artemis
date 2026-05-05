@@ -10,7 +10,7 @@ FOREACH (concept IN row.depicts | MERGE (c:Concept {wikidataId: concept.id}) SET
 
 FOREACH (creator IN row.creators | 
     MERGE (p:Artist {wikidataId: creator.id}) 
-    SET p.name = creator.name, p.birthDate = creator.birthDate, p.deathDate = creator.deathDate, p.genderLabel = creator.genderLabel, p.occupationLabel = creator.occupationLabel 
+    SET p.name = creator.name, p.birthDate = creator.birthDate, p.deathDate = creator.deathDate, p.genderLabel = creator.genderLabel, p.occupationLabel = creator.occupationLabel, p.enriched = true
     MERGE (a)-[:CREATED_BY]->(p)
     FOREACH (country IN creator.nationalities | MERGE (ctry:Country {label: country}) MERGE (p)-[:NATIONALITY]->(ctry))
     FOREACH (amovement IN creator.movements | MERGE (am:Movement {label: amovement.label}) MERGE (p)-[:PART_OF]->(am))

@@ -27,7 +27,10 @@ class MetMuseumAdapter(ArtworkProvider):
             response = requests.get(f"{self.base_url}/objects/{object_id}", timeout=10)
             if response.status_code == 200:
                 data = response.json()
-                return data if data.get("primaryImage") else None
+                has_image = data.get("primaryImage") and isinstance(data["primaryImage"], str)
+                has_wikidata = data.get("objectWikidata_URL") or data.get("artistWikidata_URL")
+                if has_image and has_wikidata:
+                    return data
         except Exception as e:
             print(f"Error en API MET (ID {object_id}): {e}")
         return None

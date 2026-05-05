@@ -9,28 +9,7 @@ class ArtistCache:
         self._in_mem: set[str] = set()
 
     def is_enriched(self, wid: str) -> bool:
-        if wid in self._in_mem:
-            return True
-
-        with self._driver.session() as session:
-            result = session.run(
-                "MATCH (a:Artist {wikidataId: $wid}) RETURN a.enriched AS enriched",
-                wid=wid,
-            ).single()
-
-        enriched = result is not None and result["enriched"] is True
-        if enriched:
-            self._in_mem.add(wid)
-        return enriched
-
-    def mark_enriched(self, wid: str) -> None:
-        with self._driver.session() as session:
-            session.run(
-                "MERGE (a:Artist {wikidataId: $wid}) SET a.enriched = true",
-                wid=wid,
-            )
-        self._in_mem.add(wid)
-        logger.debug(f"Artist {wid} marked as enriched in Neo4j.")
+        return wid in self._in_mem
 
     def prefetch(self, wids: list[str]) -> None:
         if not wids:
@@ -43,3 +22,7 @@ class ArtistCache:
             for record in result:
                 self._in_mem.add(record["wid"])
         logger.debug(f"Prefetched artist cache: {len(self._in_mem)} already-enriched artists.")
+    
+    def mark_batch_enriched(self, wids: set[str]) -> None:
+        self._in_mem.update(wids)
+        logger.debug(f"Marked {len(wids)} artists as enriched in memory cache.")

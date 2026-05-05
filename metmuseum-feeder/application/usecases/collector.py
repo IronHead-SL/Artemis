@@ -15,6 +15,7 @@ class ArtworkCollector:
 
         batch_artworks = []
         batch_status = []
+        last_processed_oid = last_id
 
         for i, oid in enumerate(pending_ids):
             raw = self.provider.fetch_artwork_data(oid)
@@ -31,16 +32,16 @@ class ArtworkCollector:
 
                 batch_artworks.append(obra.to_dict())
                 batch_status.append({"objectId": oid, "status": "PENDING_WIKIPEDIA"})
-                print(f"[+] {oid} ok")
+                last_processed_oid = oid
 
             if (i + 1) % batch_size == 0:
-                self._save(batch_artworks, batch_status, oid)
+                self._save(batch_artworks, batch_status, last_processed_oid)
                 batch_artworks, batch_status = [], []
 
         if batch_artworks:
-            self._save(batch_artworks, batch_status, pending_ids[-1])
+            self._save(batch_artworks, batch_status, last_processed_oid)
 
     def _save(self, artworks, status_list, last_id):
         self.store.persist_batch(artworks, status_list)
         self.store.update_tracker(last_id)
-        print(f"Batch guardado en ID: {last_id}")
+        print(f"Batch guardado hasta ID: {last_id}")

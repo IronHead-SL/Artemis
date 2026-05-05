@@ -1,4 +1,5 @@
 from infrastructure.adapters.mongo.database import MongoConnection
+from pymongo.errors import BulkWriteError
 from infrastructure.ports.artwork_store import ArtworkStore
 
 class ArtworkRepository(ArtworkStore):
@@ -9,8 +10,9 @@ class ArtworkRepository(ArtworkStore):
         self.tracker = self.db["procesados"]
 
     def init_indexes(self):
-        self.artworks.create_index("objectId", unique=True)
-        self.status.create_index([("status", 1), ("objectId", 1)])
+        self.artworks.create_index("objectId", unique=True, background=True)
+        self.status.create_index("status", background=True)
+        self.status.create_index("objectId", unique=True, background=True)
 
     def get_last_processed_id(self):
         doc = self.tracker.find_one({"_id": "tracker"})
@@ -20,6 +22,11 @@ class ArtworkRepository(ArtworkStore):
         self.tracker.update_one({"_id": "tracker"}, {"$set": {"last_id": last_id}}, upsert=True)
 
     def persist_batch(self, artworks, status_list):
-        if artworks:
+        if not artworks:
+            return
+        try:
+            self.artworks.insert_many(artworks, ordered=True)
+            self.status.insert_many(status_list, ordered=True)
+        except BulkWriteError:
             self.artworks.insert_many(artworks, ordered=False)
             self.status.insert_many(status_list, ordered=False)

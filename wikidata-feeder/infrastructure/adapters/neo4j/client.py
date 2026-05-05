@@ -10,7 +10,13 @@ logger = logging.getLogger(__name__)
 
 class Neo4jClient(GraphStore):
     def __init__(self, uri, user, password):
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        self.driver = GraphDatabase.driver(
+            uri, 
+            auth=(user, password),
+            max_connection_pool_size=50,
+            connection_timeout=10,
+            max_transaction_retry_time=30.0
+        )
         self.cache = ArtistCache(self.driver)
 
     def close(self):
@@ -28,11 +34,17 @@ class Neo4jClient(GraphStore):
         setup_constraints(self.driver)
 
     def upsert_batch(self, batch_payloads: list) -> None:
-        unwind_data = []
-        for item in batch_payloads:
-            for creator in item["wiki"].get("creators", []):
-                self.cache.mark_enriched(creator["id"])
+        if not batch_payloads:
+            return
 
+        unwind_data = []
+        artist_wids = set()
+        
+        for item in batch_payloads:
+            creators = item["wiki"].get("creators", [])
+            for creator in creators:
+                artist_wids.add(creator["id"])
+            
             unwind_data.append({
                 "wid": item["wid"],
                 "objectId": str(item["mongo"].get("objectId", "")),
@@ -43,15 +55,26 @@ class Neo4jClient(GraphStore):
                 "objectUrl": item["mongo"].get("objectURL", item["mongo"].get("objectUrl", "")),
                 "genres": item["wiki"].get("genres", []),
                 "movements": item["wiki"].get("movements", []),
-                "creators": item["wiki"].get("creators", []),
+                "creators": creators,
                 "depicts": item["wiki"].get("depicts", [])
             })
 
         with self.driver.session() as session:
             session.run(BATCH_UPSERT_QUERY, batch=unwind_data)
+            self.cache.mark_batch_enriched(artist_wids)
     
     def is_artist_enriched(self, wid: str) -> bool:
         return self.cache.is_enriched(wid)
 
     def prefetch_artists(self, wids: list) -> None:
         self.cache.prefetch(wids)
+
+    def delete_artworks(self, object_ids: list) -> None:
+        if not object_ids:
+            return
+        with self.driver.session() as session:
+            session.run(
+                "UNWIND $ids AS oid MATCH (a:Artwork {objectId: oid}) DETACH DELETE a",
+                ids=object_ids
+            )
+            logger.warning(f"Rollback Neo4j: deleted {len(object_ids)} artworks")
