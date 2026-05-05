@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import os
-import time
 from typing import Optional
 
 import numpy as np
@@ -10,7 +9,6 @@ import requests as _requests
 import streamlit as st
 from PIL import Image
 
-# ── Real database & embedding imports ────────────────────────────────────
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
 from neo4j import GraphDatabase
