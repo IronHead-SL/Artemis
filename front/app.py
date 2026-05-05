@@ -415,15 +415,34 @@ st.session_state.setdefault(_IMG_CACHE_KEY, {})
 
 def view_upload() -> None:
     render_header(show_new_search=False)
+    
     render_upload_prompt()
+    
+    # Perfectly center the logo using HTML/CSS Flexbox
+    try:
+        logo = Image.open("artemis-logo.png")
+        buffered = io.BytesIO()
+        logo.save(buffered, format="PNG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode()
+        
+        st.markdown(
+            f"""
+            <div style="display: flex; justify-content: center; margin-bottom: 2rem;">
+                <img src="data:image/png;base64,{img_b64}" width="150px" alt="Artemis Logo">
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception as e:
+        # Silently skip if image is missing to prevent app crash
+        pass
 
     uploaded_file = st.file_uploader(
         label="Drop an image to begin",
-        type=["jpg", "jpeg", "png", "webp"],
-        help="Maximum 10 MB. Supports JPG, PNG, WebP.",
-        label_visibility="collapsed",
+        type=["png", "jpg", "jpeg"],
+        label_visibility="collapsed"
     )
-
+    
     if uploaded_file is not None:
         if uploaded_file.size > 10 * 1024 * 1024:
             render_error("Image must be smaller than 10 MB.")

@@ -33,7 +33,6 @@ def random_spinner_msg() -> str:
 GLOBAL_CSS = f"""
 <style>
 /* ── Fonts ── */
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap');
 
 /* ── Root variables ── */
 :root {{
@@ -70,7 +69,6 @@ footer                     {{ display: none; }}
 
 /* ── Typography ── */
 h1, h2, h3 {{
-    font-family: 'Playfair Display', serif !important;
     letter-spacing: -0.02em;
 }}
 
@@ -136,7 +134,6 @@ h1, h2, h3 {{
     padding: 0.75rem;
 }}
 .card-title {{
-    font-family: 'Playfair Display', serif;
     font-size: 0.9rem;
     line-height: 1.3;
     margin: 0 0 0.2rem 0;
@@ -168,7 +165,6 @@ h1, h2, h3 {{
     margin-bottom: 2rem;
 }}
 .detail-title {{
-    font-family: 'Playfair Display', serif;
     font-size: 1.9rem;
     font-weight: 700;
     line-height: 1.2;
@@ -243,18 +239,25 @@ h1, h2, h3 {{
     border-bottom: 1px solid var(--border);
 }}
 .site-title {{
-    font-family: 'Playfair Display', serif;
     font-size: 1.6rem;
     font-weight: 700;
-    color: var(--text);
+    color: #ff3131;
     letter-spacing: -0.02em;
 }}
+
 .site-subtitle {{
     font-size: 0.78rem;
     color: var(--muted);
     letter-spacing: 0.1em;
     text-transform: uppercase;
     margin-top: 0.2rem;
+}}
+
+/* ── New Header Logo ── */
+.header-logo {{
+    display: flex;
+    align-items: center;
+    gap: 1rem; /* Space between logo and text */
 }}
 
 /* ── Upload zone ── */
@@ -265,14 +268,13 @@ h1, h2, h3 {{
     padding: 3rem 2rem;
 }}
 .upload-eyebrow {{
-    font-size: 0.7rem;
+    font-size: 1.0rem;
     text-transform: uppercase;
     letter-spacing: 0.15em;
     color: var(--primary);
     margin-bottom: 0.75rem;
 }}
 .upload-headline {{
-    font-family: 'Playfair Display', serif;
     font-size: 2.2rem;
     line-height: 1.2;
     margin-bottom: 0.75rem;
@@ -368,15 +370,29 @@ def render_header(show_new_search: bool = False) -> None:
     """Render the site-wide header."""
     col_title, col_btn = st.columns([5, 1])
     with col_title:
-        st.markdown(
-            """
-            <div>
-                <div class="site-title">ARTEMIS</div>
-                <div class="site-subtitle">AI-Powered Art Discovery</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        # Load and process the logo for the header
+        try:
+            img = Image.open("artemis-logo.png")
+            resized_logo_header = resize_image(img, 45)
+            
+            # Convert to base64 to embed in HTML
+            img_base64 = image_to_base64(pil_to_bytes(resized_logo_header, fmt='PNG'))
+            
+            st.markdown(
+                f"""
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <img src="data:image/png;base64,{img_base64}" width="45px">
+                    <div>
+                        <div class="site-title">ARTEMIS</div>
+                        <div class="site-subtitle">AI-Powered Art Discovery</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            # Fallback if image fails to load
+            st.markdown('<div class="site-title">ARTEMIS</div>', unsafe_allow_html=True)
     with col_btn:
         if show_new_search:
             if st.button("New Search", key="new_search_header"):
@@ -456,7 +472,7 @@ def render_upload_prompt() -> None:
         """
         <div class="upload-zone">
             <div class="upload-eyebrow">Discover Art</div>
-            <h1 class="upload-headline">Find Art That Speaks to You</h1>
+            <h1 class="upload-headline">Find Art Inspired by You</h1>
             <p class="upload-body">
                 Upload any image — a painting, photograph, or visual inspiration —
                 and Artemis will surface artworks across centuries that share
