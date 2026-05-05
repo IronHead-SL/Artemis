@@ -8,7 +8,7 @@ from typing import Optional
 import streamlit as st
 from PIL import Image
 
-PRIMARY      = "#2E86AB"
+PRIMARY      = "#ff3131"
 ACCENT       = "#A23B72"
 BG_DARK      = "#0D0D0D"
 BG_CARD      = "#161616"

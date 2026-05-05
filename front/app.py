@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import io
+import os
 import time
 from typing import Optional
 
+import numpy as np
 import requests as _requests
 import streamlit as st
 from PIL import Image
+
+# ── Real database & embedding imports ────────────────────────────────────
+from pymongo import MongoClient
+from qdrant_client import QdrantClient
+from neo4j import GraphDatabase
+from sentence_transformers import SentenceTransformer
 
 from utils import (
     inject_css,
@@ -39,13 +47,55 @@ _IMG_TIMEOUT = 10
 _IMG_CACHE_KEY = "_img_bytes_cache"
 
 
-def _fetch_image_bytes(url: str) -> Optional[bytes]:
-    """
-    Fetch image bytes SERVER-SIDE with proper headers.
+# ═════════════════════════════════════════════════════════════════════════
+#  Cached resources (DB clients + embedding model)
+# ═════════════════════════════════════════════════════════════════════════
 
-    Cached in session state (URL → bytes | None) so each URL is only
-    downloaded once per Streamlit session.  Returns None on any error.
-    """
+@st.cache_resource(show_spinner="Loading CLIP model…")
+def _load_clip_model() -> SentenceTransformer:
+    """Load the CLIP vision model once per container/session."""
+    # Downloads ~300 MB on first run. Mount a volume for ~/.cache/torch
+    # if you want persistence across restarts.
+    return SentenceTransformer("clip-ViT-B-32")
+
+
+@st.cache_resource(show_spinner="Connecting to MongoDB…")
+def _mongo_db():
+    uri = os.getenv("MONGO_URI", "mongodb://admin:password@mongodb:27017/")
+    client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+    db_name = os.getenv("MONGO_DB", "artemis_db")
+    return client[db_name]
+
+
+@st.cache_resource(show_spinner="Connecting to Qdrant…")
+def _qdrant_client() -> QdrantClient:
+    host = os.getenv("QDRANT_HOST", "qdrant")
+    port = int(os.getenv("QDRANT_PORT", "6333"))
+    return QdrantClient(host=host, port=port)
+
+
+@st.cache_resource(show_spinner="Connecting to Neo4j…")
+def _neo4j_driver():
+    uri = os.getenv("NEO4J_URI", "bolt://neo4j:7687")
+    user = os.getenv("NEO4J_USER", "neo4j")
+    password = os.getenv("NEO4J_PASSWORD", "password")
+    return GraphDatabase.driver(uri, auth=(user, password))
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Low-level helpers
+# ═════════════════════════════════════════════════════════════════════════
+
+def _embed_image(image_bytes: bytes) -> list[float]:
+    """Return a normalized CLIP embedding for an image."""
+    model = _load_clip_model()
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    vec = model.encode(img, convert_to_numpy=True)
+    vec = vec / np.linalg.norm(vec)
+    return vec.tolist()
+
+
+def _fetch_image_bytes(url: str) -> Optional[bytes]:
     if not url:
         return None
     cache: dict = st.session_state.setdefault(_IMG_CACHE_KEY, {})
@@ -64,7 +114,6 @@ def _fetch_image_bytes(url: str) -> Optional[bytes]:
 
 def _show_image(url: str, *, use_container_width: bool = True,
                 placeholder_ratio: str = "3/4") -> None:
-    """Fetch *url* server-side and render with st.image(), or show placeholder."""
     data = _fetch_image_bytes(url)
     if data:
         try:
@@ -79,6 +128,7 @@ def _show_image(url: str, *, use_container_width: bool = True,
         unsafe_allow_html=True,
     )
 
+
 def _store_artwork_data(artwork: dict) -> None:
     st.session_state.setdefault("artwork_data_cache", {})[artwork["id"]] = artwork
 
@@ -86,201 +136,275 @@ def _store_artwork_data(artwork: dict) -> None:
 def _get_artwork_data(artwork_id: str) -> Optional[dict]:
     return st.session_state.get("artwork_data_cache", {}).get(artwork_id)
 
+
+def _build_explanation(doc: dict) -> str:
+    """Factual explanation built from MongoDB / graph metadata."""
+    parts = []
+    title = doc.get("title", "This artwork")
+    artist = doc.get("artistDisplayName") or doc.get("artist", "an unknown artist")
+    year = doc.get("objectEndDate") or doc.get("year", "")
+    medium = doc.get("medium", "")
+    movement = doc.get("movement", "") or doc.get("style", "")
+
+    header = f"**{title}** by **{artist}**"
+    if year:
+        header += f" ({year})"
+    header += "."
+    parts.append(header)
+
+    if medium:
+        parts.append(f"Medium: {medium}.")
+    if movement:
+        parts.append(f"Stylistic context: {movement}.")
+
+    if len(parts) == 1:
+        parts.append(
+            "This piece is part of the collection based on its visual and metadata profile."
+        )
+
+    return "\n\n".join(parts)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  Core data functions — REAL implementations
+# ═════════════════════════════════════════════════════════════════════════
+
 def recommend_artworks(uploaded_image: bytes) -> list[dict]:
     """
-    Return artwork recommendations for *uploaded_image*.
-
-    MongoDB field mapping (Met feeder schema):
-        objectID            → id
-        title               → title
-        artistDisplayName   → artist
-        objectEndDate       → year
-        primaryImage        → image_url
-        primaryImageSmall   → thumbnail_url
-
-    ── STUB: replace with real Qdrant search + Mongo lookup ─────────────────
-    Example skeleton:
-
-        from qdrant_client import QdrantClient
-        from pymongo import MongoClient
-        import os
-
-        qdrant = QdrantClient(host=os.getenv("QDRANT_HOST", "qdrant"), port=6333)
-        mongo  = MongoClient(os.getenv("MONGO_URI"))["artemis_db"]
-
-        embedding = embed_image(uploaded_image)   # your CLIP embed fn
-        hits = qdrant.search("artworks", embedding, limit=10)
-
-        results = []
-        for hit in hits:
-            doc = mongo.artworks.find_one({"objectID": hit.id})
-            if doc:
-                results.append({
-                    "id":              str(doc["objectID"]),
-                    "title":           doc.get("title", "Untitled"),
-                    "artist":          doc.get("artistDisplayName", "Unknown"),
-                    "year":            doc.get("objectEndDate", ""),
-                    "image_url":       doc.get("primaryImage", ""),
-                    "thumbnail_url":   doc.get("primaryImageSmall", ""),
-                    "similarity_score": hit.score,
-                })
-        return results
+    1. Embed the uploaded image with CLIP.
+    2. Search Qdrant for nearest neighbours.
+    3. Hydrate hits with MongoDB metadata.
     """
-    import random
-    time.sleep(0.8)
+    qdrant = _qdrant_client()
+    db = _mongo_db()
+    collection = os.getenv("QDRANT_COLLECTION", "artworks")
 
-    ARTWORKS = [
-        {
-            "id": "art_0",
-            "title": "The Persistence of Memory",
-            "artist": "Salvador Dalí", "year": 1931,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/en/d/dd/The_Persistence_of_Memory.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/en/d/dd/The_Persistence_of_Memory.jpg",
-        },
-        {
-            "id": "art_1",
-            "title": "The Starry Night",
-            "artist": "Vincent van Gogh", "year": 1889,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1280px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/640px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
-        },
-        {
-            "id": "art_2",
-            "title": "Girl with a Pearl Earring",
-            "artist": "Johannes Vermeer", "year": 1665,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/1665_Girl_with_a_Pearl_Earring.jpg/800px-1665_Girl_with_a_Pearl_Earring.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/1665_Girl_with_a_Pearl_Earring.jpg/400px-1665_Girl_with_a_Pearl_Earring.jpg",
-        },
-        {
-            "id": "art_3",
-            "title": "The Birth of Venus",
-            "artist": "Sandro Botticelli", "year": 1485,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Sandro_Botticelli_-_La_nascita_di_Venere_-_Google_Art_Project_-_edited.jpg/1280px-Sandro_Botticelli_-_La_nascita_di_Venere_-_Google_Art_Project_-_edited.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Sandro_Botticelli_-_La_nascita_di_Venere_-_Google_Art_Project_-_edited.jpg/640px-Sandro_Botticelli_-_La_nascita_di_Venere_-_Google_Art_Project_-_edited.jpg",
-        },
-        {
-            "id": "art_4",
-            "title": "Water Lilies",
-            "artist": "Claude Monet", "year": 1906,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/a/aa/Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg/1280px-Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/aa/Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg/640px-Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg",
-        },
-        {
-            "id": "art_5",
-            "title": "The Great Wave off Kanagawa",
-            "artist": "Katsushika Hokusai", "year": 1831,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Tsunami_by_hokusai_19th_century.jpg/1280px-Tsunami_by_hokusai_19th_century.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Tsunami_by_hokusai_19th_century.jpg/640px-Tsunami_by_hokusai_19th_century.jpg",
-        },
-        {
-            "id": "art_6",
-            "title": "Las Meninas",
-            "artist": "Diego Velázquez", "year": 1656,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Las_Meninas_01.jpg/800px-Las_Meninas_01.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Las_Meninas_01.jpg/400px-Las_Meninas_01.jpg",
-        },
-        {
-            "id": "art_7",
-            "title": "A Sunday on La Grande Jatte",
-            "artist": "Georges Seurat", "year": 1886,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7d/A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg/1280px-A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7d/A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg/640px-A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg",
-        },
-    ]
-    picks = random.sample(ARTWORKS, 7)
-    for p in picks:
-        p["similarity_score"] = round(random.uniform(0.65, 0.98), 2)
-    return picks
+    vector = _embed_image(uploaded_image)
+
+    try:
+        # qdrant-client < 1.12
+        hits = qdrant.search(
+            collection_name=collection,
+            query_vector=vector,
+            limit=12,
+            with_payload=True,
+        )
+    except AttributeError:
+        # qdrant-client >= 1.12  (search removed → query_points)
+        resp = qdrant.query_points(
+            collection_name=collection,
+            query=vector,
+            limit=12,
+            with_payload=True,
+        )
+        hits = resp.points
+
+    results = []
+    for hit in hits:
+        payload = hit.payload or {}
+        object_id = (
+            payload.get("objectID")
+            or payload.get("id")
+            or payload.get("mongo_id")
+        )
+        if object_id is None:
+            continue
+
+        try:
+            object_id = int(object_id)
+        except ValueError:
+            pass
+
+        doc = db.artworks.find_one({"objectID": object_id})
+        if not doc:
+            continue
+
+        results.append({
+            "id": str(doc["objectID"]),
+            "title": doc.get("title", "Untitled"),
+            "artist": doc.get("artistDisplayName", "Unknown"),
+            "year": doc.get("objectEndDate", ""),
+            "image_url": doc.get("primaryImage", ""),
+            "thumbnail_url": doc.get("primaryImageSmall", doc.get("primaryImage", "")),
+            "similarity_score": hit.score,
+        })
+
+    return results
 
 
 def get_artwork_details(artwork_id: str) -> dict:
     """
-    Fetch full details for *artwork_id*.
-
-    ── STUB: replace with real MongoDB + Neo4j call ──────────────────────────
+    Fetch full details from MongoDB + Neo4j.
+    Falls back to session-state if the document is missing.
     """
-    time.sleep(0.4)
+    driver = _neo4j_driver()
+    db = _mongo_db()
 
-    recs = st.session_state.get("recommendations") or []
-    base = next((r for r in recs if r["id"] == artwork_id), None)
-    if base is None:
-        base = _get_artwork_data(artwork_id) or {}
+    try:
+        query_id = int(artwork_id)
+    except ValueError:
+        query_id = artwork_id
 
-    RELATED_POOL = [
-        {
-            "id": "rel_scream",
-            "title": "The Scream", "artist": "Edvard Munch", "year": 1893,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg/800px-Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg/400px-Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg",
-        },
-        {
-            "id": "rel_kandinsky",
-            "title": "Composition VIII", "artist": "Wassily Kandinsky", "year": 1923,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b4/Vassily_Kandinsky%2C_1923_-_Composition_8%2C_huile_sur_toile%2C_140_cm_x_201_cm%2C_Mus%C3%A9e_Guggenheim%2C_New_York.jpg/1280px-Vassily_Kandinsky%2C_1923_-_Composition_8%2C_huile_sur_toile%2C_140_cm_x_201_cm%2C_Mus%C3%A9e_Guggenheim%2C_New_York.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b4/Vassily_Kandinsky%2C_1923_-_Composition_8%2C_huile_sur_toile%2C_140_cm_x_201_cm%2C_Mus%C3%A9e_Guggenheim%2C_New_York.jpg/640px-Vassily_Kandinsky%2C_1923_-_Composition_8%2C_huile_sur_toile%2C_140_cm_x_201_cm%2C_Mus%C3%A9e_Guggenheim%2C_New_York.jpg",
-        },
-        {
-            "id": "rel_nightwatch",
-            "title": "The Night Watch", "artist": "Rembrandt", "year": 1642,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Rembrandt_van_Rijn_-_De_Nachtwacht.jpg/1280px-Rembrandt_van_Rijn_-_De_Nachtwacht.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Rembrandt_van_Rijn_-_De_Nachtwacht.jpg/640px-Rembrandt_van_Rijn_-_De_Nachtwacht.jpg",
-        },
-        {
-            "id": "rel_gothic",
-            "title": "American Gothic", "artist": "Grant Wood", "year": 1930,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Grant_Wood_-_American_Gothic_-_Google_Art_Project.jpg/800px-Grant_Wood_-_American_Gothic_-_Google_Art_Project.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Grant_Wood_-_American_Gothic_-_Google_Art_Project.jpg/400px-Grant_Wood_-_American_Gothic_-_Google_Art_Project.jpg",
-        },
-        {
-            "id": "rel_guernica",
-            "title": "Guernica", "artist": "Pablo Picasso", "year": 1937,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/en/7/74/PicassoGuernica.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/en/7/74/PicassoGuernica.jpg",
-        },
-        {
-            "id": "rel_arnolfini",
-            "title": "The Arnolfini Portrait", "artist": "Jan van Eyck", "year": 1434,
-            "image_url":     "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/Van_Eyck_-_Arnolfini_Portrait.jpg/800px-Van_Eyck_-_Arnolfini_Portrait.jpg",
-            "thumbnail_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/Van_Eyck_-_Arnolfini_Portrait.jpg/400px-Van_Eyck_-_Arnolfini_Portrait.jpg",
-        },
-    ]
+    # ── Base document from MongoDB ─────────────────────────────────────
+    doc = db.artworks.find_one({"objectID": query_id})
+    if doc:
+        base = {
+            "id": str(doc["objectID"]),
+            "title": doc.get("title", "Untitled"),
+            "artist": doc.get("artistDisplayName", "Unknown"),
+            "year": doc.get("objectEndDate", ""),
+            "image_url": doc.get("primaryImage", ""),
+            "thumbnail_url": doc.get("primaryImageSmall", doc.get("primaryImage", "")),
+            "medium": doc.get("medium", ""),
+            "dimensions": doc.get("dimensions", ""),
+        }
+    else:
+        recs = st.session_state.get("recommendations") or []
+        base = next((r for r in recs if r["id"] == artwork_id), {})
+        base.setdefault("medium", "")
+        base.setdefault("dimensions", "")
 
-    related_with_scores = []
-    for j, item in enumerate(RELATED_POOL):
-        enriched = {**item, "similarity_score": round(0.55 + j * 0.06, 2)}
-        _store_artwork_data(enriched)
-        related_with_scores.append(enriched)
+    # ── Enrichment from Neo4j ──────────────────────────────────────────
+    explanation = ""
+    related_artworks: list[dict] = []
+
+    try:
+        with driver.session() as session:
+            result = session.run(
+                """
+                MATCH (a)
+                WHERE a.objectID = $id OR a.id = $id_str OR a.mongo_id = $id_str
+                WITH a LIMIT 1
+                OPTIONAL MATCH (a)-[:CREATED_BY|:BY|:ARTIST]->(artist:Artist)
+                OPTIONAL MATCH (a)-[:PART_OF|:BELONGS_TO|:MOVEMENT]->(mov:Movement)
+                OPTIONAL MATCH (a)-[:LOCATED_AT|:IN_COLLECTION]->(mus:Museum)
+                RETURN a, artist,
+                       collect(DISTINCT mov.name) as movements,
+                       collect(DISTINCT mus.name) as museums
+                """,
+                id=query_id,
+                id_str=str(artwork_id),
+            )
+
+            record = result.single()
+            if record and record["a"]:
+                artist_node = record["artist"]
+                movements = [m for m in record["movements"] if m]
+                museums = [m for m in record["museums"] if m]
+
+                parts = []
+                artist_name = (
+                    artist_node.get("name")
+                    if artist_node
+                    else base.get("artist", "the artist")
+                )
+                header = f"**{base.get('title', 'This work')}** was created by **{artist_name}**"
+                if base.get("year"):
+                    header += f" in {base['year']}"
+                header += "."
+                parts.append(header)
+
+                if movements:
+                    parts.append(
+                        f"It is situated within the {', '.join(movements)} movement(s)."
+                    )
+                if museums:
+                    parts.append(f"Held in the collection of {', '.join(museums)}.")
+                if base.get("medium"):
+                    parts.append(f"Medium: {base['medium']}.")
+
+                explanation = "\n\n".join(parts)
+
+                # Related artworks via graph (same artist → same movement)
+                rel_result = session.run(
+                    """
+                    MATCH (a)
+                    WHERE a.objectID = $id OR a.id = $id_str OR a.mongo_id = $id_str
+                    WITH a LIMIT 1
+                    OPTIONAL MATCH (a)-[:CREATED_BY|:BY|:ARTIST]->(art:Artist)
+                    OPTIONAL MATCH (a)-[:PART_OF|:BELONGS_TO|:MOVEMENT]->(mov:Movement)
+                    WITH a, art, mov
+                    OPTIONAL MATCH (rel:Artwork)-[:CREATED_BY|:BY|:ARTIST]->(art)
+                    WHERE rel <> a
+                    WITH a, art, mov, collect(DISTINCT rel)[0..3] as by_artist
+                    OPTIONAL MATCH (rel2:Artwork)-[:PART_OF|:BELONGS_TO|:MOVEMENT]->(mov)
+                    WHERE rel2 <> a AND NOT rel2 IN by_artist
+                    WITH by_artist, collect(DISTINCT rel2)[0..3] as by_movement
+                    UNWIND (by_artist + by_movement) as rel_node
+                    RETURN DISTINCT rel_node.objectID as oid, rel_node.id as rid
+                    LIMIT 6
+                    """,
+                    id=query_id,
+                    id_str=str(artwork_id),
+                )
+
+                related_ids = []
+                for r in rel_result:
+                    rid = r["oid"] if r["oid"] is not None else r["rid"]
+                    if rid is not None:
+                        try:
+                            related_ids.append(int(rid))
+                        except ValueError:
+                            related_ids.append(rid)
+
+                if related_ids:
+                    for idx, rel_doc in enumerate(
+                        db.artworks.find({"objectID": {"$in": related_ids}}).limit(6)
+                    ):
+                        related_artworks.append({
+                            "id": str(rel_doc["objectID"]),
+                            "title": rel_doc.get("title", "Untitled"),
+                            "artist": rel_doc.get("artistDisplayName", "Unknown"),
+                            "year": rel_doc.get("objectEndDate", ""),
+                            "image_url": rel_doc.get("primaryImage", ""),
+                            "thumbnail_url": rel_doc.get(
+                                "primaryImageSmall", rel_doc.get("primaryImage", "")
+                            ),
+                            "similarity_score": round(0.60 + (idx % 3) * 0.12, 2),
+                        })
+            else:
+                explanation = _build_explanation(doc if doc else base)
+
+    except Exception as exc:
+        explanation = _build_explanation(doc if doc else base)
+
+    # ── Fallback related artworks (MongoDB only) ───────────────────────
+    if not related_artworks and base.get("artist") and base["artist"] != "Unknown":
+        for idx, rel_doc in enumerate(
+            db.artworks.find({
+                "artistDisplayName": base["artist"],
+                "objectID": {"$ne": query_id},
+            }).limit(6)
+        ):
+            related_artworks.append({
+                "id": str(rel_doc["objectID"]),
+                "title": rel_doc.get("title", "Untitled"),
+                "artist": rel_doc.get("artistDisplayName", "Unknown"),
+                "year": rel_doc.get("objectEndDate", ""),
+                "image_url": rel_doc.get("primaryImage", ""),
+                "thumbnail_url": rel_doc.get("primaryImageSmall", rel_doc.get("primaryImage", "")),
+                "similarity_score": round(0.60 + (idx % 3) * 0.12, 2),
+            })
 
     return {
-        "title":       base.get("title", "Untitled"),
-        "artist":      base.get("artist", "Unknown Artist"),
-        "year":        base.get("year", ""),
-        "medium":      "Oil on canvas",
-        "dimensions":  "73.7 × 92.1 cm",
-        "image_url":   base.get("image_url", ""),
-        "explanation": (
-            "This work resonates with your uploaded image through its masterful use of "
-            "color temperature and compositional weight. The artist's brushwork creates a "
-            "visual rhythm that echoes the tonal distribution in your image — specifically "
-            "the interplay between warm highlights and cool shadow regions."
-            "\n\n"
-            "The spatial organization mirrors your image's underlying geometric structure, "
-            "where primary masses anchor the composition while secondary elements provide "
-            "a dynamic counterpoint. The chromatic palette — particularly the relationship "
-            "between the dominant hues — shares a calculated harmony with your source material."
-            "\n\n"
-            "Art historians often situate this piece at a pivotal moment in the artist's "
-            "development, where technical mastery began to serve pure expression. "
-            "The visible tension between representation and abstraction creates the emotional "
-            "charge that connects it so strongly to contemporary visual sensibilities."
-        ),
-        "related_artworks": related_with_scores,
+        "title": base.get("title", "Untitled"),
+        "artist": base.get("artist", "Unknown Artist"),
+        "year": base.get("year", ""),
+        "medium": base.get("medium", "Oil on canvas"),
+        "dimensions": base.get("dimensions", ""),
+        "image_url": base.get("image_url", base.get("thumbnail_url", "")),
+        "explanation": explanation,
+        "related_artworks": related_artworks,
     }
 
 
+# ═════════════════════════════════════════════════════════════════════════
+#  Streamlit UI (unchanged logic, now powered by real data above)
+# ═════════════════════════════════════════════════════════════════════════
+img = Image.open("artemis-logo.png")
 st.set_page_config(
     page_title="Artemis · Art Discovery",
-    page_icon="🎨",
+    page_icon=img,
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -452,7 +576,6 @@ def _open_artwork(artwork: dict) -> None:
             if details is None:
                 details = get_artwork_details(art_id)
                 cache_details(art_id, details)
-                # Pre-fetch related images while spinner is visible
                 for rel in details.get("related_artworks", []):
                     url = rel.get("thumbnail_url") or rel.get("image_url", "")
                     if url:
@@ -610,6 +733,7 @@ def _back_to_results_button() -> None:
     if st.button("← Back to Results"):
         st.session_state["selected_artwork"] = None
         st.rerun()
+
 
 def main() -> None:
     uploaded = st.session_state.get("uploaded_image")
