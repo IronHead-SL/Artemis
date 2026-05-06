@@ -1,5 +1,4 @@
 services:
-
   neo4j:
     image: neo4j:latest
     container_name: artemis-neo4j
@@ -7,16 +6,19 @@ services:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_memory_heap_initial__size: "2G"
+      NEO4J_dbms_memory_heap_max__size: "2G"
     ports:
       - "7474:7474"
       - "7687:7687"
     volumes:
-      - ./mnt/neo4j_data:/data
+      - neo4j_data:/data
     healthcheck:
       test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${NEO4J_PASSWORD:-password}", "RETURN 1"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 30s
 
   mongodb:
     image: mongo
@@ -24,7 +26,7 @@ services:
     ports:
       - "27018:27017"
     volumes:
-      - ./mnt/mongo_data:/data/db
+      - mongo_data:/data/db
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: password
@@ -34,6 +36,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -42,7 +45,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - ./mnt/qdrant_data:/qdrant/storage
+      - qdrant_data:/qdrant/storage
     restart: always
 
   met_feeder:
@@ -51,10 +54,11 @@ services:
       dockerfile: ./metmuseum-feeder/Dockerfile
     container_name: artemis_met_feeder
     depends_on:
-      mongodb:  
+      mongodb:
         condition: service_healthy
     environment:
       MONGO_URI: "mongodb://admin:password@mongodb:27017/"
+    restart: on-failure
 
   wikidata_feeder:
     build:
@@ -64,7 +68,7 @@ services:
     depends_on:
       neo4j:
         condition: service_healthy
-      mongodb:  
+      mongodb:
         condition: service_healthy
     environment:
       NEO4J_URI: "bolt://neo4j:7687"
@@ -79,6 +83,13 @@ services:
       context: .
       dockerfile: ./ia-image-processor/Dockerfile
     container_name: artemis_ia_processor
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       mongodb:
         condition: service_healthy
@@ -88,11 +99,13 @@ services:
       - MONGO_URI=mongodb://admin:password@mongodb:27017/
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - HF_TOKEN=${HF_TOKEN:-}
     restart: on-failure
 
   frontend:
     build:
-      context: ./front
+      context: .
+      dockerfile: ./front/Dockerfile
     container_name: artemis_frontend
     ports:
       - "8501:8501"

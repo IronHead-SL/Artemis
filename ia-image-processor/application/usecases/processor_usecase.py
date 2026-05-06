@@ -14,13 +14,22 @@ class ImageProcessorUseCase:
             return 0
         
         results = []
+        processed_ids = []
+        
         for img in images:
             embedding = self.model.get_embedding(img.id, img.url)
-            results.append(embedding)
-        
-        self.vector_db.save_batch(results)
-        
-        for img in images:
-            self.repo.mark_as_processed(img.id)
             
-        return len(images)
+            if embedding is None:
+                print(f"Saltando imagen {img.id}: error en embedding")
+                continue
+                
+            results.append(embedding)
+            processed_ids.append(img.id)
+        
+        if results:
+            self.vector_db.save_batch(results)
+        
+        for img_id in processed_ids:
+            self.repo.mark_as_processed(img_id)
+            
+        return len(processed_ids)

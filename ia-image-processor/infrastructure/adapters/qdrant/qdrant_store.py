@@ -16,8 +16,17 @@ class QdrantStore(VectorStore):
         points = [
             models.PointStruct(
                 id=int(r.image_id), 
-                vector=r.vector
+                vector=r.vector,
+                payload={
+                    "image_url": r.image_url,
+                    "title": r.title,
+                    "processed_at": r.processed_at
+                }
             ) for r in results
         ]
 
-        self.client.upsert(collection_name=self.collection_name, points=points)
+        try:
+            self.client.upsert(collection_name=self.collection_name, points=points)
+        except Exception as e:
+            print(f"Error guardando en Qdrant: {e}")
+            raise

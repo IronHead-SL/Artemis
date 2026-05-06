@@ -4,10 +4,12 @@ import io
 import os
 from typing import Optional
 
+import torch
 import numpy as np
 import requests as _requests
 import streamlit as st
 from PIL import Image
+import open_clip
 
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
@@ -45,16 +47,13 @@ _IMG_TIMEOUT = 10
 _IMG_CACHE_KEY = "_img_bytes_cache"
 
 
-# ═════════════════════════════════════════════════════════════════════════
-#  Cached resources (DB clients + embedding model)
-# ═════════════════════════════════════════════════════════════════════════
-
 @st.cache_resource(show_spinner="Loading CLIP model…")
-def _load_clip_model() -> SentenceTransformer:
-    """Load the CLIP vision model once per container/session."""
-    # Downloads ~300 MB on first run. Mount a volume for ~/.cache/torch
-    # if you want persistence across restarts.
-    return SentenceTransformer("clip-ViT-B-32")
+def _load_clip_model():
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        'ViT-B-32', pretrained='laion2b_s34b_b79k'
+    )
+    model.eval()
+    return model, preprocess
 
 
 @st.cache_resource(show_spinner="Connecting to MongoDB…")
@@ -80,17 +79,14 @@ def _neo4j_driver():
     return GraphDatabase.driver(uri, auth=(user, password))
 
 
-# ═════════════════════════════════════════════════════════════════════════
-#  Low-level helpers
-# ═════════════════════════════════════════════════════════════════════════
-
 def _embed_image(image_bytes: bytes) -> list[float]:
-    """Return a normalized CLIP embedding for an image."""
-    model = _load_clip_model()
+    model, preprocess = _load_clip_model()
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    vec = model.encode(img, convert_to_numpy=True)
-    vec = vec / np.linalg.norm(vec)
-    return vec.tolist()
+    tensor = preprocess(img).unsqueeze(0)
+    with torch.no_grad():
+        vector = model.encode_image(tensor)
+    vector /= vector.norm(dim=-1, keepdim=True)
+    return vector.cpu().numpy().tolist()[0]
 
 
 def _fetch_image_bytes(url: str) -> Optional[bytes]:
@@ -201,9 +197,10 @@ def recommend_artworks(uploaded_image: bytes) -> list[dict]:
     for hit in hits:
         payload = hit.payload or {}
         object_id = (
-            payload.get("objectID")
+            payload.get("objectId")
             or payload.get("id")
             or payload.get("mongo_id")
+            or payload.get("title")  
         )
         if object_id is None:
             continue
@@ -213,17 +210,17 @@ def recommend_artworks(uploaded_image: bytes) -> list[dict]:
         except ValueError:
             pass
 
-        doc = db.artworks.find_one({"objectID": object_id})
+        doc = db.artworks.find_one({"objectId": object_id})
         if not doc:
             continue
 
         results.append({
-            "id": str(doc["objectID"]),
+            "id": str(doc["objectId"]),
             "title": doc.get("title", "Untitled"),
             "artist": doc.get("artistDisplayName", "Unknown"),
             "year": doc.get("objectEndDate", ""),
-            "image_url": doc.get("primaryImage", ""),
-            "thumbnail_url": doc.get("primaryImageSmall", doc.get("primaryImage", "")),
+            "image_url": doc.get("primaryImage") or doc.get("imageUrl", ""),
+            "thumbnail_url": doc.get("primaryImageSmall") or doc.get("imageUrl", ""),
             "similarity_score": hit.score,
         })
 
@@ -244,15 +241,15 @@ def get_artwork_details(artwork_id: str) -> dict:
         query_id = artwork_id
 
     # ── Base document from MongoDB ─────────────────────────────────────
-    doc = db.artworks.find_one({"objectID": query_id})
+    doc = db.artworks.find_one({"objectId": query_id})
     if doc:
         base = {
-            "id": str(doc["objectID"]),
+            "id": str(doc["objectId"]),
             "title": doc.get("title", "Untitled"),
             "artist": doc.get("artistDisplayName", "Unknown"),
             "year": doc.get("objectEndDate", ""),
-            "image_url": doc.get("primaryImage", ""),
-            "thumbnail_url": doc.get("primaryImageSmall", doc.get("primaryImage", "")),
+            "image_url": doc.get("primaryImage") or doc.get("imageUrl", ""),
+            "thumbnail_url": doc.get("primaryImageSmall") or doc.get("imageUrl", ""),
             "medium": doc.get("medium", ""),
             "dimensions": doc.get("dimensions", ""),
         }
@@ -262,7 +259,6 @@ def get_artwork_details(artwork_id: str) -> dict:
         base.setdefault("medium", "")
         base.setdefault("dimensions", "")
 
-    # ── Enrichment from Neo4j ──────────────────────────────────────────
     explanation = ""
     related_artworks: list[dict] = []
 
@@ -271,7 +267,7 @@ def get_artwork_details(artwork_id: str) -> dict:
             result = session.run(
                 """
                 MATCH (a)
-                WHERE a.objectID = $id OR a.id = $id_str OR a.mongo_id = $id_str
+                WHERE a.objectId = $id OR a.id = $id_str OR a.mongo_id = $id_str
                 WITH a LIMIT 1
                 OPTIONAL MATCH (a)-[:CREATED_BY|:BY|:ARTIST]->(artist:Artist)
                 OPTIONAL MATCH (a)-[:PART_OF|:BELONGS_TO|:MOVEMENT]->(mov:Movement)
@@ -296,7 +292,7 @@ def get_artwork_details(artwork_id: str) -> dict:
                     if artist_node
                     else base.get("artist", "the artist")
                 )
-                header = f"**{base.get('title', 'This work')}** was created by **{artist_name}**"
+                header = f"</b>{base.get('title', 'This work')}</b> was created by </b>{artist_name}</b>"
                 if base.get("year"):
                     header += f" in {base['year']}"
                 header += "."
@@ -313,11 +309,10 @@ def get_artwork_details(artwork_id: str) -> dict:
 
                 explanation = "\n\n".join(parts)
 
-                # Related artworks via graph (same artist → same movement)
                 rel_result = session.run(
                     """
                     MATCH (a)
-                    WHERE a.objectID = $id OR a.id = $id_str OR a.mongo_id = $id_str
+                    WHERE a.objectId = $id OR a.id = $id_str OR a.mongo_id = $id_str
                     WITH a LIMIT 1
                     OPTIONAL MATCH (a)-[:CREATED_BY|:BY|:ARTIST]->(art:Artist)
                     OPTIONAL MATCH (a)-[:PART_OF|:BELONGS_TO|:MOVEMENT]->(mov:Movement)
@@ -329,7 +324,7 @@ def get_artwork_details(artwork_id: str) -> dict:
                     WHERE rel2 <> a AND NOT rel2 IN by_artist
                     WITH by_artist, collect(DISTINCT rel2)[0..3] as by_movement
                     UNWIND (by_artist + by_movement) as rel_node
-                    RETURN DISTINCT rel_node.objectID as oid, rel_node.id as rid
+                    RETURN DISTINCT rel_node.objectId as oid, rel_node.id as rid
                     LIMIT 6
                     """,
                     id=query_id,
@@ -347,10 +342,10 @@ def get_artwork_details(artwork_id: str) -> dict:
 
                 if related_ids:
                     for idx, rel_doc in enumerate(
-                        db.artworks.find({"objectID": {"$in": related_ids}}).limit(6)
+                        db.artworks.find({"objectId": {"$in": related_ids}}).limit(6)
                     ):
                         related_artworks.append({
-                            "id": str(rel_doc["objectID"]),
+                            "id": str(rel_doc["objectId"]),
                             "title": rel_doc.get("title", "Untitled"),
                             "artist": rel_doc.get("artistDisplayName", "Unknown"),
                             "year": rel_doc.get("objectEndDate", ""),
@@ -371,11 +366,11 @@ def get_artwork_details(artwork_id: str) -> dict:
         for idx, rel_doc in enumerate(
             db.artworks.find({
                 "artistDisplayName": base["artist"],
-                "objectID": {"$ne": query_id},
+                "objectId": {"$ne": query_id},
             }).limit(6)
         ):
             related_artworks.append({
-                "id": str(rel_doc["objectID"]),
+                "id": str(rel_doc["objectId"]),
                 "title": rel_doc.get("title", "Untitled"),
                 "artist": rel_doc.get("artistDisplayName", "Unknown"),
                 "year": rel_doc.get("objectEndDate", ""),
