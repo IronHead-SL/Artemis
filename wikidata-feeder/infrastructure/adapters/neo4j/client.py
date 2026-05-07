@@ -53,12 +53,13 @@ class Neo4jClient(GraphStore):
                 "medium": item["mongo"].get("medium", ""),
                 "objectDate": item["mongo"].get("objectDate", ""),
                 "objectUrl": item["mongo"].get("objectURL", item["mongo"].get("objectUrl", "")),
+                "artistDisplayName": item["mongo"].get("artistDisplayName", ""),  # ← ESTO
                 "genres": item["wiki"].get("genres", []),
                 "movements": item["wiki"].get("movements", []),
                 "creators": creators,
                 "depicts": item["wiki"].get("depicts", [])
             })
-
+    
         with self.driver.session() as session:
             session.run(BATCH_UPSERT_QUERY, batch=unwind_data)
             self.cache.mark_batch_enriched(artist_wids)

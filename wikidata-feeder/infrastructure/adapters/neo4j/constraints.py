@@ -11,6 +11,7 @@ _CONSTRAINTS = [
     "CREATE CONSTRAINT concept_wikidata IF NOT EXISTS FOR (c:Concept) REQUIRE c.wikidataId IS UNIQUE",
     "CREATE CONSTRAINT country_label IF NOT EXISTS FOR (c:Country) REQUIRE c.label IS UNIQUE",
     "CREATE CONSTRAINT institution_label IF NOT EXISTS FOR (i:Institution) REQUIRE i.label IS UNIQUE",
+    "CREATE CONSTRAINT technique_label IF NOT EXISTS FOR (t:Technique) REQUIRE t.label IS UNIQUE",
 ]
 
 def setup_constraints(driver) -> None:

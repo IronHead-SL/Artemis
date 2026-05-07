@@ -18,13 +18,19 @@ class Enricher:
 
     def _fetch_bundle(self, artwork_wid: str, title: str) -> dict:
         artwork_data = self.wiki.fetch_artwork_data(artwork_wid)
+        
         for creator in artwork_data.get("creators", []):
-            if not self.neo4j.is_artist_enriched(creator["id"]):
-                artist_data = self.wiki.fetch_artist_data(creator["id"])
-                creator.update(artist_data)
+            artist_data = self.wiki.fetch_artist_data(creator["id"])
+            creator["nationalities"]   = artist_data.get("nationalities", [])
+            creator["movements"]       = artist_data.get("movements", [])
+            creator["institutions"]    = artist_data.get("institutions", [])
+            creator["influenced_by"]   = artist_data.get("influenced_by", [])
+            creator["birthDate"]       = creator.get("birthDate") or artist_data.get("birthDate")
+            creator["deathDate"]       = creator.get("deathDate") or artist_data.get("deathDate")
+            creator["genderLabel"]     = creator.get("genderLabel") or artist_data.get("genderLabel")
+            creator["occupationLabel"] = creator.get("occupationLabel") or artist_data.get("occupationLabel")
 
         extract = self.wikipedia.fetch_extract(title)
-        
         return {"wikidata": artwork_data, "extract": extract}
 
     def run(self, batch_size: int = 50) -> int:

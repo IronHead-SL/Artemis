@@ -20,7 +20,8 @@ class ArtworkRepository:
             {
                 "objectId": 1, "title": 1, "objectWikidataUrl": 1,
                 "artistWikidataUrl": 1, "department": 1, "medium": 1,
-                "objectDate": 1, "objectUrl": 1, "objectURL": 1
+                "objectDate": 1, "objectUrl": 1, "objectURL": 1,
+                "artistDisplayName": 1
             }
         ))
 
