@@ -4,7 +4,7 @@
 
 # Artemis
 
-### *Exploracion de arte con Bases de Datos No Relacionales*
+### *Buscador Visual y Relacional de Arte*
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
@@ -13,7 +13,7 @@
 [![Qdrant](https://img.shields.io/badge/Qdrant-Vectorial-FF4F00?style=for-the-badge&logo=vectorworks&logoColor=white)](https://qdrant.tech/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-UI-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
 
-*Proyecto universitario para descubrir obras del Met Museum combinando imagenes, datos documentales y grafos.*
+*Proyecto universitario para explorar el Met Museum combinando imagenes, datos documentales y grafos.*
 
 </div>
 
@@ -25,23 +25,24 @@
 - [🔌 Fuentes de datos](#-fuentes-de-datos)
 - [📦 Modulos del sistema](#-modulos-del-sistema)
 - [🚀 Instalacion y uso](#-instalacion-y-uso)
+- [🧩 Notas de instalacion](#-notas-de-instalacion)
 - [🔎 Consultas y resultados](#-consultas-y-resultados)
 - [🧭 Trabajo futuro](#-trabajo-futuro)
 - [👥 Autores](#-autores)
 - [📄 Licencia](#-licencia)
 
 ## 📜 Descripcion
-Artemis es una plataforma para explorar patrimonio cultural del Met Museum. El usuario puede subir una imagen y recibir obras visualmente similares. Luego puede navegar por relaciones como artista, tecnica, movimiento o departamento. El enfoque esta pensado para la asignatura de **Bases de Datos No Relacionales**, mostrando como combinar modelos documentales, de grafos y vectoriales en un mismo proyecto.
+Artemis es una plataforma para explorar patrimonio cultural del Met Museum. El usuario puede subir una imagen y recibir obras visualmente similares. A partir de ahi, puede navegar por relaciones como artista, tecnica, movimiento o departamento. El enfoque esta pensado para la asignatura de **Bases de Datos No Relacionales**, mostrando de forma clara como combinar modelos documentales, de grafos y vectoriales en un mismo proyecto.
 
 ## ✨ Caracteristicas
 - Busqueda por imagen con similitud visual.
 - Contexto historico y semantico mediante un grafo.
 - Ingesta automatizada desde fuentes publicas.
 - Interfaz sencilla para explorar resultados.
-- Arquitectura modular y mantenible.
+- Arquitectura modular y facil de mantener.
 
 ## 🏗️ Arquitectura
-El proyecto sigue una **arquitectura hexagonal (puertos y adaptadores)**. Esta separacion permite cambiar fuentes de datos o tecnologias sin modificar la logica del dominio.
+El proyecto sigue una **arquitectura hexagonal (puertos y adaptadores)**. Esta separacion permite cambiar fuentes de datos o tecnologias sin tocar la logica del dominio.
 
 ```mermaid
 flowchart LR
@@ -106,6 +107,21 @@ docker compose up -d
 3) Abrir la interfaz:
 ```text
 http://localhost:8501
+```
+
+## 🧩 Notas de instalacion
+- La primera construccion puede tardar aproximadamente 12-13 minutos (750 s). Es normal, ya que se descargan dependencias pesadas y se construyen las imagenes base.
+- Si no tienes GPU, comenta el bloque de `deploy.resources.reservations.devices` en `ia-image-processor` y `frontend` dentro de [docker-compose.yml](docker-compose.yml). Asi evitas errores relacionados con el uso de GPU.
+
+Ejemplo de bloque a comentar:
+```yaml
+# deploy:
+#   resources:
+#     reservations:
+#       devices:
+#         - driver: nvidia
+#           count: 1
+#           capabilities: [gpu]
 ```
 
 ## 🔎 Consultas y resultados
