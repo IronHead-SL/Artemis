@@ -3,10 +3,10 @@ from __future__ import annotations
 import base64
 import io
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 import torch
-import numpy as np
 import requests as _requests
 import streamlit as st
 from PIL import Image
@@ -20,7 +20,6 @@ from utils import (
     inject_css,
     init_session_state,
     render_header,
-    render_breadcrumb,
     render_error,
     render_upload_prompt,
     load_image_safe,
@@ -33,6 +32,7 @@ from utils import (
     random_spinner_msg,
     _reset_state,
     PRIMARY,
+    ICONS,
 )
 
 _IMG_HEADERS = {
@@ -43,7 +43,7 @@ _IMG_HEADERS = {
     "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
     "Referer": "https://www.metmuseum.org/",
 }
-_IMG_TIMEOUT = 10
+_IMG_TIMEOUT = 8
 _IMG_CACHE_KEY = "_img_bytes_cache"
 
 
@@ -51,7 +51,7 @@ _IMG_CACHE_KEY = "_img_bytes_cache"
 #  Connections
 # ═══════════════════════════════════════════════════════════════
 
-@st.cache_resource(show_spinner="Loading CLIP model…")
+@st.cache_resource(show_spinner=False)
 def _load_clip_model():
     model, _, preprocess = open_clip.create_model_and_transforms(
         'ViT-B-32', pretrained='laion2b_s34b_b79k'
@@ -60,14 +60,14 @@ def _load_clip_model():
     return model, preprocess
 
 
-@st.cache_resource(show_spinner="Connecting to MongoDB…")
+@st.cache_resource(show_spinner=False)
 def _mongo_db():
     uri = os.getenv("MONGO_URI", "mongodb://admin:password@mongodb:27017/")
     client = MongoClient(uri, serverSelectionTimeoutMS=5000)
     return client[os.getenv("MONGO_DB", "artemis_db")]
 
 
-@st.cache_resource(show_spinner="Connecting to Qdrant…")
+@st.cache_resource(show_spinner=False)
 def _qdrant_client() -> QdrantClient:
     return QdrantClient(
         host=os.getenv("QDRANT_HOST", "qdrant"),
@@ -75,11 +75,12 @@ def _qdrant_client() -> QdrantClient:
     )
 
 
-@st.cache_resource(show_spinner="Connecting to Neo4j…")
+@st.cache_resource(show_spinner=False)
 def _neo4j_driver():
     return GraphDatabase.driver(
         os.getenv("NEO4J_URI", "bolt://neo4j:7687"),
         auth=(os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "password")),
+        max_connection_pool_size=10,
     )
 
 
@@ -114,31 +115,54 @@ def _fetch_image_bytes(url: str) -> Optional[bytes]:
         return None
 
 
-def _show_image_card(url: str) -> None:
-    """Square-cropped card image via base64 — avoids Streamlit sizing bugs."""
+def _prefetch_images_parallel(urls: list[str], max_workers: int = 8) -> None:
+    """Fetch multiple images concurrently and store in session cache."""
+    cache: dict = st.session_state.setdefault(_IMG_CACHE_KEY, {})
+    missing = [u for u in urls if u and u not in cache]
+    if not missing:
+        return
+
+    def _fetch(url: str) -> tuple[str, Optional[bytes]]:
+        try:
+            resp = _requests.get(url, headers=_IMG_HEADERS, timeout=_IMG_TIMEOUT)
+            resp.raise_for_status()
+            return url, resp.content
+        except Exception:
+            return url, None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch, u): u for u in missing}
+        for future in as_completed(futures):
+            url, data = future.result()
+            cache[url] = data
+
+
+def _show_image_card(url: str, max_height: int = 300) -> None:
+    """Square-cropped card image via base64 — consistent sizing."""
     data = _fetch_image_bytes(url)
     if data:
         try:
             img = Image.open(io.BytesIO(data)).convert("RGB")
             w, h = img.size
             side = min(w, h)
-            img = img.crop(((w - side) // 2, (h - side) // 2,
-                             (w + side) // 2, (h + side) // 2))
-            img = img.resize((400, 400), Image.LANCZOS)
-            buf = io.BytesIO()
+            left = (w - side) // 2
+            top  = (h - side) // 2
+            img  = img.crop((left, top, left + side, top + side))
+            img  = img.resize((400, 400), Image.LANCZOS)
+            buf  = io.BytesIO()
             img.save(buf, format="JPEG", quality=85)
-            b64 = base64.b64encode(buf.getvalue()).decode()
+            b64  = base64.b64encode(buf.getvalue()).decode()
             st.markdown(
                 f"<img src='data:image/jpeg;base64,{b64}' "
-                "style='width:100%;aspect-ratio:1/1;object-fit:cover;"
-                "display:block;border-radius:4px 4px 0 0;'>",
+                f"style='width:100%;aspect-ratio:1/1;object-fit:cover;"
+                f"display:block;border-radius:4px 4px 0 0;max-height:{max_height}px;'>",
                 unsafe_allow_html=True,
             )
             return
         except Exception:
             pass
     st.markdown(
-        "<div style='width:100%;aspect-ratio:1/1;"
+        f"<div style='width:100%;aspect-ratio:1/1;max-height:{max_height}px;"
         "background:linear-gradient(135deg,#1a1a1a,#2a2a2a);"
         "border-radius:4px 4px 0 0;'></div>",
         unsafe_allow_html=True,
@@ -146,14 +170,14 @@ def _show_image_card(url: str) -> None:
 
 
 def _show_image_detail(url: str) -> None:
-    """Detail view — always resize to max 700px to respect column layout."""
+    """Detail view — responsive with max width constraint."""
     data = _fetch_image_bytes(url)
     if data:
         try:
             img = Image.open(io.BytesIO(data)).convert("RGB")
             w, h = img.size
-            if max(w, h) > 700:
-                scale = 700 / max(w, h)
+            if w > 600:
+                scale = 600 / w
                 img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=88)
@@ -217,11 +241,117 @@ def _build_fallback_explanation(doc: dict) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Neo4j queries — split to avoid cartesian explosions
+# ═══════════════════════════════════════════════════════════════
+
+def _neo4j_get_metadata(session, id_str: str) -> dict:
+    r1 = session.run("""
+        MATCH (a:Artwork) WHERE toString(a.objectId) = $id LIMIT 1
+        OPTIONAL MATCH (a)-[:CREATED_BY]->(artist:Artist)
+        OPTIONAL MATCH (artist)-[:NATIONALITY]->(country:Country)
+        OPTIONAL MATCH (artist)-[:STUDIED_AT]->(inst:Institution)
+        RETURN
+            coalesce(toString(artist.name), toString(artist.label), '') AS artist_name,
+            collect(DISTINCT coalesce(toString(country.label), toString(country.name))) AS countries,
+            collect(DISTINCT coalesce(toString(inst.label), toString(inst.name))) AS institutions
+    """, id=id_str).single()
+
+    r2 = session.run("""
+        MATCH (a:Artwork) WHERE toString(a.objectId) = $id LIMIT 1
+        OPTIONAL MATCH (a)-[:PART_OF]->(mov:Movement)
+        OPTIONAL MATCH (a)-[:HAS_GENRE]->(genre:Genre)
+        OPTIONAL MATCH (a)-[:USES_TECHNIQUE]->(tech:Technique)
+        OPTIONAL MATCH (a)-[:BELONGS_TO]->(dept:Department)
+        RETURN
+            collect(DISTINCT coalesce(toString(mov.label), toString(mov.name))) AS movements,
+            collect(DISTINCT coalesce(toString(genre.label), toString(genre.name))) AS genres,
+            collect(DISTINCT coalesce(toString(tech.label), toString(tech.name))) AS techniques,
+            collect(DISTINCT coalesce(toString(dept.label), toString(dept.name))) AS departments
+    """, id=id_str).single()
+
+    r3 = session.run("""
+        MATCH (a:Artwork) WHERE toString(a.objectId) = $id LIMIT 1
+        OPTIONAL MATCH (a)-[:CREATED_BY]->(artist:Artist)
+        OPTIONAL MATCH (a)-[:INFLUENCED_BY]->(infl1:Artist)
+        OPTIONAL MATCH (artist)-[:INFLUENCED_BY]->(infl2:Artist)
+        WITH
+            collect(DISTINCT coalesce(toString(infl1.name), toString(infl1.label))) AS i1,
+            collect(DISTINCT coalesce(toString(infl2.name), toString(infl2.label))) AS i2
+        RETURN [x IN (i1 + i2) WHERE x IS NOT NULL AND x <> ''] AS influences
+    """, id=id_str).single()
+
+    return {
+        "artist_name":  (r1["artist_name"] if r1 else ""),
+        "countries":    [x for x in (r1["countries"]    if r1 else []) if x],
+        "institutions": [x for x in (r1["institutions"] if r1 else []) if x],
+        "movements":    [x for x in (r2["movements"]    if r2 else []) if x],
+        "genres":       [x for x in (r2["genres"]       if r2 else []) if x],
+        "techniques":   [x for x in (r2["techniques"]   if r2 else []) if x],
+        "departments":  [x for x in (r2["departments"]  if r2 else []) if x],
+        "influences":   [x for x in (r3["influences"]   if r3 else []) if x],
+    }
+
+
+def _neo4j_get_related(session, id_str: str) -> list[tuple[int, str]]:
+    result = session.run("""
+        MATCH (a:Artwork) WHERE toString(a.objectId) = $id
+
+        CALL {
+            WITH a
+            MATCH (a)-[:CREATED_BY]->(artist:Artist)<-[:CREATED_BY]-(r:Artwork)
+            WHERE r <> a AND r.objectId IS NOT NULL
+            RETURN r.objectId AS oid, 'Same Artist' AS rel_type, 3 AS priority
+            LIMIT 4
+        UNION ALL
+            WITH a
+            MATCH (a)-[:PART_OF]->(mov:Movement)<-[:PART_OF]-(r:Artwork)
+            WHERE r <> a AND r.objectId IS NOT NULL
+            RETURN r.objectId AS oid, 'Same Movement' AS rel_type, 2 AS priority
+            LIMIT 4
+        UNION ALL
+            WITH a
+            MATCH (a)-[:HAS_GENRE]->(genre:Genre)<-[:HAS_GENRE]-(r:Artwork)
+            WHERE r <> a AND r.objectId IS NOT NULL
+            RETURN r.objectId AS oid, 'Same Genre' AS rel_type, 4 AS priority
+            LIMIT 4
+        UNION ALL
+            WITH a
+            MATCH (a)-[:USES_TECHNIQUE]->(t:Technique)<-[:USES_TECHNIQUE]-(r:Artwork)
+            WHERE r <> a AND r.objectId IS NOT NULL
+            RETURN r.objectId AS oid, 'Same Technique' AS rel_type, 1 AS priority
+            LIMIT 4
+        UNION ALL
+            WITH a
+            MATCH (a)-[:BELONGS_TO]->(d:Department)<-[:BELONGS_TO]-(r:Artwork)
+            WHERE r <> a AND r.objectId IS NOT NULL
+            RETURN r.objectId AS oid, 'Same Department' AS rel_type, 0 AS priority
+            LIMIT 3
+        }
+
+        RETURN DISTINCT toString(oid) AS oid, rel_type, priority
+        ORDER BY priority DESC
+        LIMIT 15
+    """, id=id_str)
+
+    seen    = set()
+    related = []
+    for row in result:
+        try:
+            oid_int = int(row["oid"])
+        except (ValueError, TypeError):
+            continue
+        if oid_int not in seen:
+            seen.add(oid_int)
+            related.append((oid_int, row["rel_type"]))
+    return related
+
+
+# ═══════════════════════════════════════════════════════════════
 #  Core data
 # ═══════════════════════════════════════════════════════════════
 
 def recommend_artworks(uploaded_image: bytes) -> list[dict]:
-    """CLIP → Qdrant → MongoDB. Dedup by objectId only — same name ≠ same artwork."""
+    """CLIP → Qdrant → MongoDB. Dedup by objectId only."""
     qdrant     = _qdrant_client()
     db         = _mongo_db()
     collection = os.getenv("QDRANT_COLLECTION", "artworks")
@@ -293,6 +423,7 @@ def get_artwork_details(artwork_id: str) -> dict:
         query_id_int = artwork_id
     query_id_str = str(artwork_id)
 
+    # ── MongoDB fetch ──
     doc = db.artworks.find_one({"objectId": query_id_int})
     if doc:
         base = {
@@ -318,138 +449,82 @@ def get_artwork_details(artwork_id: str) -> dict:
     related_artworks:  list[dict] = []
     neo4j_ok = False
 
+    # ── Neo4j: split queries for performance ──
     try:
         with driver.session() as session:
+            meta    = _neo4j_get_metadata(session, query_id_str)
+            related = _neo4j_get_related(session, query_id_str)
 
-            result = session.run("""
-                            MATCH (a:Artwork)
-                            WHERE toString(a.objectId) = $id_str
-                            WITH a LIMIT 1
-                            OPTIONAL MATCH (a)-[:CREATED_BY]->(artist:Artist)
-                            OPTIONAL MATCH (a)-[:PART_OF]->(mov:Movement)
-                            OPTIONAL MATCH (a)-[:HAS_GENRE]->(genre:Genre)
-                            OPTIONAL MATCH (a)-[:USES_TECHNIQUE]->(tech:Technique)
-                            OPTIONAL MATCH (artist)-[:NATIONALITY]->(country:Country)
-                            RETURN
-                                coalesce(toString(artist.name), toString(artist.label)) AS artist_name,
-                                collect(DISTINCT CASE 
-                                    WHEN mov.label IS NOT NULL THEN toString(mov.label) 
-                                    ELSE toString(mov.name) END) AS movements,
-                                collect(DISTINCT CASE 
-                                    WHEN genre.label IS NOT NULL THEN toString(genre.label) 
-                                    ELSE toString(genre.name) END) AS genres,
-                                collect(DISTINCT CASE 
-                                    WHEN tech.label IS NOT NULL THEN toString(tech.label) 
-                                    ELSE toString(tech.name) END) AS techniques,
-                                collect(DISTINCT CASE 
-                                    WHEN country.label IS NOT NULL THEN toString(country.label) 
-                                    ELSE toString(country.name) END) AS countries,
-                                [] AS institutions,
-                                [] AS influences
-                        """, id_str=query_id_str)
+        neo4j_ok    = True
+        artist_name = meta["artist_name"] or base.get("artist", "Unknown")
 
-            record = result.single()
+        # Build explanation
+        header = f"<b>{base.get('title','This work')}</b> created by <b>{artist_name}</b>"
+        if base.get("year"):
+            header += f" in {base['year']}"
+        explanation_parts.append(header + ".")
+        if base.get("medium"):
+            explanation_parts.append(f"Medium: {base['medium']}.")
+        if base.get("department"):
+            explanation_parts.append(f"Department: {base['department']}.")
+        wiki = base.get("wiki_summary", "")
+        if wiki:
+            explanation_parts.append(wiki[:400] + ("…" if len(wiki) > 400 else ""))
 
-            print(f"DEBUG Neo4j record for {query_id_str}: {dict(record) if record else None}")
-            if record:
-                neo4j_ok     = True
-                artist_name  = record["artist_name"] or base.get("artist", "Unknown")
-                movements    = [m for m in (record["movements"] or []) if m]
-                genres       = [g for g in (record["genres"] or []) if g]
-                techniques   = [t for t in (record["techniques"] or []) if t]
-                countries    = [c for c in (record["countries"] or []) if c]
-                institutions = [i for i in (record.get("institutions") or []) if i]
-                influences   = [i for i in (record.get("influences") or []) if i]
+        # Graph sections
+        def _add_section(label_key: str, label_text: str, items: list) -> None:
+            if items:
+                graph_sections.append({
+                    "label": f"{ICONS.get(label_key, '')} {label_text}".strip(),
+                    "items": items,
+                })
 
-                header = f"<b>{base.get('title','This work')}</b> created by <b>{artist_name}</b>"
-                if base.get("year"):
-                    header += f" in {base['year']}"
-                explanation_parts.append(header + ".")
-                if base.get("medium"):
-                    explanation_parts.append(f"Medium: {base['medium']}.")
-                if base.get("department"):
-                    explanation_parts.append(f"Department: {base['department']}.")
-                wiki = base.get("wiki_summary", "")
-                if wiki:
-                    explanation_parts.append(wiki[:400] + ("…" if len(wiki) > 400 else ""))
+        _add_section("movement",    "Art Movement",       meta["movements"])
+        _add_section("genre",       "Genre",              meta["genres"])
+        _add_section("technique",   "Technique",          meta["techniques"])
+        _add_section("country",     "Artist Nationality", meta["countries"])
+        _add_section("department",  "Department",         meta["departments"])
+        _add_section("institution", "Studied At",         meta["institutions"])
+        _add_section("influence",   "Influenced By",      meta["influences"])
 
-                if movements:
-                    graph_sections.append({"label": "🎨 Art Movement",       "items": movements})
-                if genres:
-                    graph_sections.append({"label": "📂 Genre",              "items": genres})
-                if techniques:
-                    graph_sections.append({"label": "🖌 Technique",          "items": techniques})
-                if countries:
-                    graph_sections.append({"label": "🌍 Artist Nationality", "items": countries})
-                if institutions:
-                    graph_sections.append({"label": "🏛 Studied At",         "items": institutions})
-                if influences:
-                    graph_sections.append({"label": "💡 Influenced By",      "items": influences})
+        # Related artworks — single MongoDB batch query
+        if related:
+            rel_ids      = [oid for oid, _ in related]
+            rel_type_map = {oid: rtype for oid, rtype in related}
+            rel_order    = {oid: idx for idx, oid in enumerate(rel_ids)}
 
-            # Related — TAMBIÉN dentro del with
-            rel_result = session.run("""
-                MATCH (a:Artwork)
-                WHERE toString(a.objectId) = $id_str
-                WITH a LIMIT 1
+            docs = list(db.artworks.find({"objectId": {"$in": rel_ids}}).limit(15))
+            docs.sort(key=lambda d: rel_order.get(d["objectId"], 999))
 
-                OPTIONAL MATCH (a)-[:HAS_GENRE]->(genre:Genre)<-[:HAS_GENRE]-(r1:Artwork)
-                WHERE r1 <> a
-                WITH a, collect(DISTINCT {artwork: r1, type: 'Same Genre'})[0..3] AS by_genre
-
-                OPTIONAL MATCH (a)-[:CREATED_BY]->(artist:Artist)<-[:CREATED_BY]-(r2:Artwork)
-                WHERE r2 <> a
-                WITH a, by_genre, collect(DISTINCT {artwork: r2, type: 'Same Artist'})[0..3] AS by_artist
-
-                OPTIONAL MATCH (a)-[:PART_OF]->(mov:Movement)<-[:PART_OF]-(r3:Artwork)
-                WHERE r3 <> a
-                WITH a, by_genre, by_artist,
-                    collect(DISTINCT {artwork: r3, type: 'Same Movement'})[0..3] AS by_movement
-
-                OPTIONAL MATCH (a)-[:USES_TECHNIQUE]->(t:Technique)<-[:USES_TECHNIQUE]-(r4:Artwork)
-                WHERE r4 <> a
-                WITH by_genre, by_artist, by_movement,
-                    collect(DISTINCT {artwork: r4, type: 'Same Technique'})[0..3] AS by_technique
-
-                UNWIND (by_genre + by_artist + by_movement + by_technique) AS item
-                // FIX: Aseguramos que devolvemos el ID como string para que Mongo lo encuentre después
-                RETURN toString(item.artwork.objectId) AS oid, item.type AS relation_type
-                LIMIT 12
-            """, id_str=query_id_str)
-
-            related_ids  = []
-            relation_map = {}
-            for r in rel_result:
-                oid = r["oid"]
-                if oid is not None:
-                    try:
-                        oid_int = int(oid)
-                        related_ids.append(oid_int)
-                        relation_map[oid_int] = r["relation_type"]
-                    except (ValueError, TypeError):
-                        pass
-
-            if related_ids:
-                for rel_doc in db.artworks.find(
-                    {"objectId": {"$in": related_ids}}
-                ).limit(12):
-                    card = _doc_to_card(rel_doc)
-                    card["relation_type"] = relation_map.get(rel_doc["objectId"], "Related")
-                    related_artworks.append(card)
+            for rel_doc in docs:
+                card = _doc_to_card(rel_doc)
+                card["relation_type"] = rel_type_map.get(rel_doc["objectId"], "Related")
+                related_artworks.append(card)
 
     except Exception as exc:
         neo4j_ok = False
-        print(f"❌ ERROR CRÍTICO NEO4J: {e}")
         print(f"Neo4j error: {exc}")
 
     if not explanation_parts:
         explanation_parts = _build_fallback_explanation(doc if doc else base)
 
+    # Fallback: same artist via MongoDB
     if not related_artworks and base.get("artist") and base["artist"] not in ("Unknown", "Unknown Artist"):
         for rel_doc in db.artworks.find({
             "artistDisplayName": base["artist"],
             "objectId":          {"$ne": query_id_int},
         }).limit(6):
-            related_artworks.append(_doc_to_card(rel_doc))
+            card = _doc_to_card(rel_doc)
+            card["relation_type"] = "Same Artist"
+            related_artworks.append(card)
+
+    # Prefetch related images in parallel
+    urls_to_prefetch = [
+        r.get("thumbnail_url") or r.get("image_url", "")
+        for r in related_artworks
+    ]
+    if urls_to_prefetch:
+        _prefetch_images_parallel(urls_to_prefetch)
 
     return {
         "title":             base.get("title", "Untitled"),
@@ -522,36 +597,36 @@ def view_upload() -> None:
         render_error("Could not load the image. Please upload a valid JPG or PNG.")
         return
 
-    col_prev, col_info = st.columns([1, 2], gap="large")
+    col_prev, col_info = st.columns([2, 3], gap="large")
+
     with col_prev:
-        preview = resize_image(img, 400)
+        preview = resize_image(img, 600)
         buf = io.BytesIO()
         preview.save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode()
         st.markdown(
-            f"<img src='data:image/jpeg;base64,{b64}' style='width:100%;border-radius:4px;'>",
+            f"<img src='data:image/jpeg;base64,{b64}' "
+            f"style='width:100%;border-radius:4px;display:block;margin-top:-0.5rem;'>",
             unsafe_allow_html=True,
         )
 
     with col_info:
         st.markdown(
-            f"""<div style='padding-top:1rem;'>
-                <div style='font-size:0.7rem;text-transform:uppercase;letter-spacing:0.12em;
-                            color:{PRIMARY};margin-bottom:0.5rem;'>Image loaded</div>
-                <div style='font-size:1.2rem;font-weight:500;margin-bottom:0.5rem;
-                            word-break:break-all;'>{uploaded_file.name}</div>
-                <div style='font-size:0.82rem;color:#6a6460;margin-bottom:1.5rem;'>
-                    {img.size[0]} × {img.size[1]} px · {uploaded_file.size // 1024} KB
-                </div>
-                <div style='font-size:0.85rem;color:#8A8580;line-height:1.6;'>
-                    Artemis will analyze visual patterns, color relationships, and
-                    compositional structure to find historically and aesthetically
-                    related artworks in our database.
-                </div>
+            f"""<div style='font-size:0.68rem;text-transform:uppercase;letter-spacing:0.14em;
+                        color:{PRIMARY};margin-bottom:0.55rem;margin-top:0.15rem;'>Image loaded</div>
+            <div style='font-size:1.35rem;font-weight:600;margin-bottom:0.35rem;
+                        word-break:break-all;color:#F0EDE8;line-height:1.2;'>{uploaded_file.name}</div>
+            <div style='font-size:0.78rem;color:#555;margin-bottom:1.6rem;letter-spacing:0.02em;'>
+                {img.size[0]} × {img.size[1]} px &nbsp;·&nbsp; {uploaded_file.size // 1024} KB
+            </div>
+            <div style='font-size:0.85rem;color:#8A8580;line-height:1.7;
+                        border-left:2px solid #2A2A2A;padding-left:0.9rem;margin-bottom:1.8rem;'>
+                Artemis will analyze visual patterns, color relationships, and
+                compositional structure to find historically and aesthetically
+                related artworks in our database.
             </div>""",
             unsafe_allow_html=True,
         )
-        st.write("")
         if st.button("✦ Find Similar Artworks", type="primary", key="btn_find"):
             img_bytes = pil_to_bytes(resize_image(img, 800))
             _run_recommendations(img_bytes)
@@ -568,9 +643,8 @@ def _run_recommendations(img_bytes: bytes) -> None:
             st.session_state["recommendations"] = results
             for artwork in results:
                 _store_artwork_data(artwork)
-                url = artwork.get("thumbnail_url") or artwork.get("image_url", "")
-                if url:
-                    _fetch_image_bytes(url)
+            urls = [a.get("thumbnail_url") or a.get("image_url", "") for a in results]
+            _prefetch_images_parallel(urls)
             st.rerun()
         except Exception as e:
             render_error(f"Recommendation service unavailable: {e}")
@@ -584,12 +658,12 @@ def view_results() -> None:
     render_header(show_new_search=True)
     recommendations: list[dict] = st.session_state["recommendations"]
 
-    col_img, col_txt = st.columns([1, 3], gap="large")
+    col_img, col_txt = st.columns([2, 5], gap="large")
     with col_img:
         try:
             raw = st.session_state["uploaded_image"]
             img = Image.open(io.BytesIO(raw))
-            img = resize_image(img, 300)
+            img = resize_image(img, 500)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=85)
             b64 = base64.b64encode(buf.getvalue()).decode()
@@ -675,10 +749,6 @@ def _open_artwork(artwork: dict) -> None:
             if details is None:
                 details = get_artwork_details(art_id)
                 cache_details(art_id, details)
-                for rel in details.get("related_artworks", []):
-                    url = rel.get("thumbnail_url") or rel.get("image_url", "")
-                    if url:
-                        _fetch_image_bytes(url)
             push_history(art_id, artwork.get("title", "Artwork"))
             st.session_state["selected_artwork"] = art_id
             st.rerun()
@@ -692,22 +762,21 @@ def _open_artwork(artwork: dict) -> None:
 
 def view_detail() -> None:
     render_header(show_new_search=True)
-    render_breadcrumb()
 
-    art_id: str             = st.session_state["selected_artwork"]
+    art_id: str = st.session_state["selected_artwork"]
 
-    if art_id in st.session_state["artwork_details_cache"]:
-        del st.session_state["artwork_details_cache"][art_id]
-        
-    with st.spinner("Loading artwork details…"):
-        try:
-            details = get_artwork_details(art_id)
-            cache_details(art_id, details)
-        except Exception as e:
-            render_error(f"Could not load artwork details: {e}")
-            _back_to_results_button()
-            return
+    details = get_cached_details(art_id)
+    if details is None:
+        with st.spinner("Loading artwork details…"):
+            try:
+                details = get_artwork_details(art_id)
+                cache_details(art_id, details)
+            except Exception as e:
+                render_error(f"Could not load artwork details: {e}")
+                _back_to_results_button()
+                return
 
+    # ── Back button only — breadcrumb removed ──
     col_back, _ = st.columns([1, 4])
     with col_back:
         if st.button("← Back to Results", key="back_btn"):
@@ -715,7 +784,7 @@ def view_detail() -> None:
             st.rerun()
 
     st.write("")
-    col_img, col_info = st.columns([5, 7], gap="large")
+    col_img, col_info = st.columns([1, 1], gap="medium")
 
     with col_img:
         _show_image_detail(details.get("image_url", ""))
@@ -731,8 +800,8 @@ def view_detail() -> None:
         graph_sections    = details.get("graph_sections", [])
         neo4j_ok          = details.get("neo4j_ok", False)
 
-        recs    = st.session_state.get("recommendations") or []
-        matched = next((r for r in recs if r["id"] == art_id), None) or _get_artwork_data(art_id)
+        recs      = st.session_state.get("recommendations") or []
+        matched   = next((r for r in recs if r["id"] == art_id), None) or _get_artwork_data(art_id)
         sim_score = matched.get("similarity_score") if matched else None
 
         st.markdown(
@@ -761,7 +830,7 @@ def view_detail() -> None:
             )
 
         if explanation_parts:
-            source = "Via Neo4j graph" if neo4j_ok else "From collection metadata"
+            source = "Via knowledge graph" if neo4j_ok else "From collection metadata"
             st.markdown(
                 f"<div class='section-label'>About this work "
                 f"<span style='font-size:0.6rem;color:#444;margin-left:0.5rem;'>{source}</span></div>",
@@ -795,13 +864,12 @@ def view_detail() -> None:
                     unsafe_allow_html=True,
                 )
 
-    # Related artworks — graph navigation only, no AI search button
     related: list[dict] = details.get("related_artworks", [])
     st.markdown("<hr class='subtle-divider'>", unsafe_allow_html=True)
 
     if related:
         st.markdown(
-            "<div class='section-label'>Related Artworks — Navigate the Graph</div>",
+            f"<div class='section-label'>{ICONS.get('link','')} Related Artworks — Navigate the Graph</div>",
             unsafe_allow_html=True,
         )
         _render_related(related)
@@ -819,25 +887,41 @@ def _render_related(related: list[dict]) -> None:
     for artwork in related:
         groups[artwork.get("relation_type", "Related")].append(artwork)
 
-    for group_name, artworks in groups.items():
+    priority_order = [
+        "Same Artist", "Same Movement", "Same Genre",
+        "Same Technique", "Same Department", "Related"
+    ]
+    sorted_groups = sorted(
+        groups.items(),
+        key=lambda x: priority_order.index(x[0]) if x[0] in priority_order else 99
+    )
+
+    for group_name, artworks in sorted_groups:
+        icon = ICONS.get("link", "")
+        if "Movement"    in group_name: icon = ICONS.get("movement", "")
+        elif "Genre"     in group_name: icon = ICONS.get("genre", "")
+        elif "Artist"    in group_name: icon = ICONS.get("artist", "")
+        elif "Technique" in group_name: icon = ICONS.get("technique", "")
+        elif "Department"in group_name: icon = ICONS.get("department", "")
+
         st.markdown(
             f"<div class='section-label' style='margin-top:1.2rem;'>"
-            f"🔗 {group_name}</div>",
+            f"{icon} {group_name}</div>",
             unsafe_allow_html=True,
         )
-        n = min(len(artworks), 3)
+        n    = min(len(artworks), 3)
         cols = st.columns(n, gap="small")
         for col, artwork in zip(cols, artworks[:n]):
             with col:
                 thumb_url = artwork.get("thumbnail_url") or artwork.get("image_url", "")
-                title = artwork.get("title", "Untitled")
-                artist = artwork.get("artist", "")
+                title     = artwork.get("title", "Untitled")
+                artist    = artwork.get("artist", "")
                 st.markdown(
                     "<div style='border:1px solid #222;border-radius:4px;"
                     "overflow:hidden;background:#161616;'>",
                     unsafe_allow_html=True,
                 )
-                _show_image_card(thumb_url)
+                _show_image_card(thumb_url, max_height=250)
                 st.markdown(
                     f"<div style='padding:0.4rem 0.5rem 0.5rem;'>"
                     f"<div style='font-size:0.78rem;font-weight:500;line-height:1.3;"

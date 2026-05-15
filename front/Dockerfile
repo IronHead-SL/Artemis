@@ -15,6 +15,7 @@ RUN uv export --no-emit-project --no-hashes --format requirements-txt > req.txt 
 
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('clip-ViT-B-32')"
 
+
 COPY front/ ./
 
 EXPOSE 8501
