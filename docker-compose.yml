@@ -104,6 +104,9 @@ services:
       QDRANT_HOST: "qdrant"
       QDRANT_PORT: "6333"
       HF_TOKEN: "${HF_TOKEN:-}"
+      IA_IMAGE_DOWNLOAD_WORKERS: "8"
+      IA_IMAGE_EMBED_BATCH: "16"
+      IA_IMAGE_REQUEST_TIMEOUT: "10"
     restart: on-failure
 
   frontend:
@@ -112,6 +115,13 @@ services:
       dockerfile: ./front/Dockerfile
     image: artemis/frontend:latest
     container_name: artemis.frontend
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     ports:
       - "8501:8501"
     depends_on:

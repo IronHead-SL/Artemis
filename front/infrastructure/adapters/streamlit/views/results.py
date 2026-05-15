@@ -91,7 +91,7 @@ def _render_card(artwork: dict) -> None:
         f"{badge}</div></div>",
         unsafe_allow_html=True,
     )
-    if st.button("View →", key=f"card_btn_{artwork['id']}", help=f"{title} — {artist}"):
+    if st.button("View →", key=f"card_btn_{artwork['id']}"):
         open_artwork(artwork)
 
 

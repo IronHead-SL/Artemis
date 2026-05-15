@@ -16,15 +16,27 @@ class ImageProcessorUseCase:
         results = []
         processed_ids = []
         
-        for img in images:
-            embedding = self.model.get_embedding(img.id, img.url)
-            
-            if embedding is None:
-                print(f"Saltando imagen {img.id}: error en embedding")
-                continue
-                
-            results.append(embedding)
-            processed_ids.append(img.id)
+        if hasattr(self.model, "get_embeddings"):
+            embeddings_map = self.model.get_embeddings(images)
+            for img in images:
+                embedding = embeddings_map.get(img.id)
+                if embedding is None:
+                    print(f"Saltando imagen {img.id}: error en embedding")
+                    self.repo.mark_as_failed(img.id, "EMBEDDING_ERROR")
+                    continue
+                results.append(embedding)
+                processed_ids.append(img.id)
+        else:
+            for img in images:
+                embedding = self.model.get_embedding(img.id, img.url)
+
+                if embedding is None:
+                    print(f"Saltando imagen {img.id}: error en embedding")
+                    self.repo.mark_as_failed(img.id, "EMBEDDING_ERROR")
+                    continue
+
+                results.append(embedding)
+                processed_ids.append(img.id)
         
         if results:
             self.vector_db.save_batch(results)

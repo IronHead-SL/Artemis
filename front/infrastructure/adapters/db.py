@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 import open_clip
+import torch
 import streamlit as st
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
@@ -11,8 +12,9 @@ from neo4j import GraphDatabase
 
 @st.cache_resource(show_spinner=False)
 def get_clip_model():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model, _, preprocess = open_clip.create_model_and_transforms(
-        "ViT-B-32", pretrained="laion2b_s34b_b79k"
+        "ViT-B-32", pretrained="laion2b_s34b_b79k", device=device
     )
     model.eval()
     return model, preprocess

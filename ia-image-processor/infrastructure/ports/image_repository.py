@@ -8,3 +8,7 @@ class ImageRepository(ABC):
     @abstractmethod
     def mark_as_processed(self, image_id):
         pass
+
+    @abstractmethod
+    def mark_as_failed(self, image_id, reason: str | None = None):
+        pass
