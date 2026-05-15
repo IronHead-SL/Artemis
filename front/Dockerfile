@@ -1,25 +1,36 @@
 FROM python:3.12-slim
 
-WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+    curl libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+ENV UV_SYSTEM_PYTHON=1 \
+    UV_COMPILE_BYTECODE=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-COPY pyproject.toml uv.lock ./
+WORKDIR /app
 
-RUN uv export --no-emit-project --no-hashes --format requirements-txt > req.txt && \
-    pip install --no-cache-dir -r req.txt && \
-    rm req.txt
+COPY front/pyproject.toml ./front/
 
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('clip-ViT-B-32')"
+RUN uv pip install --system \
+    "pymongo>=4.16.0" \
+    "neo4j>=5.0.0" \
+    "qdrant-client>=1.17.1" \
+    "streamlit>=1.57.0" \
+    "open-clip-torch>=3.3.0" \
+    "torch>=2.11.0" \
+    "torchvision>=0.26.0" \
+    "Pillow>=10.0" \
+    "requests>=2.32.5"
 
+COPY front/ ./front/
 
-COPY front/ ./
+WORKDIR /app/front
 
 EXPOSE 8501
-
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
 
 CMD ["streamlit", "run", "app.py", \

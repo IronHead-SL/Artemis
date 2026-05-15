@@ -1,7 +1,7 @@
 services:
   neo4j:
     image: neo4j:latest
-    container_name: artemis-neo4j
+    container_name: artemis.neo4j
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password}
       NEO4J_PLUGINS: '["apoc"]'
@@ -22,7 +22,7 @@ services:
 
   mongodb:
     image: mongo
-    container_name: artemis_mongo
+    container_name: artemis.mongodb
     ports:
       - "27018:27017"
     volumes:
@@ -40,7 +40,7 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: artemis_qdrant
+    container_name: artemis.qdrant
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -48,11 +48,12 @@ services:
       - qdrant_data:/qdrant/storage
     restart: always
 
-  met_feeder:
+  metmuseum-feeder:
     build:
       context: .
       dockerfile: ./metmuseum-feeder/Dockerfile
-    container_name: artemis_met_feeder
+    image: artemis/metmuseum-feeder:latest
+    container_name: artemis.metmuseum-feeder
     depends_on:
       mongodb:
         condition: service_healthy
@@ -60,11 +61,12 @@ services:
       MONGO_URI: "mongodb://admin:password@mongodb:27017/"
     restart: on-failure
 
-  wikidata_feeder:
+  wikidata-feeder:
     build:
       context: .
       dockerfile: ./wikidata-feeder/Dockerfile
-    container_name: artemis-feeder
+    image: artemis/wikidata-feeder:latest
+    container_name: artemis.wikidata-feeder
     depends_on:
       neo4j:
         condition: service_healthy
@@ -82,7 +84,8 @@ services:
     build:
       context: .
       dockerfile: ./ia-image-processor/Dockerfile
-    container_name: artemis_ia_processor
+    image: artemis/ia-image-processor:latest
+    container_name: artemis.ia-image-processor
     deploy:
       resources:
         reservations:
@@ -96,17 +99,18 @@ services:
       qdrant:
         condition: service_started
     environment:
-      - MONGO_URI=mongodb://admin:password@mongodb:27017/
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-      - HF_TOKEN=${HF_TOKEN:-}
+      MONGO_URI: "mongodb://admin:password@mongodb:27017/"
+      QDRANT_HOST: "qdrant"
+      QDRANT_PORT: "6333"
+      HF_TOKEN: "${HF_TOKEN:-}"
     restart: on-failure
 
   frontend:
     build:
       context: .
       dockerfile: ./front/Dockerfile
-    container_name: artemis_frontend
+    image: artemis/frontend:latest
+    container_name: artemis.frontend
     ports:
       - "8501:8501"
     depends_on:
@@ -129,4 +133,3 @@ volumes:
   neo4j_data:
   mongo_data:
   qdrant_data:
-  model_cache:
