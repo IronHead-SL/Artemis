@@ -1,4 +1,5 @@
 services:
+
   neo4j:
     image: neo4j:latest
     container_name: artemis.neo4j
@@ -12,7 +13,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     volumes:
-      - neo4j_data:/data
+      - ./data/neo4j:/data
     healthcheck:
       test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${NEO4J_PASSWORD:-password}", "RETURN 1"]
       interval: 10s
@@ -26,7 +27,7 @@ services:
     ports:
       - "27018:27017"
     volumes:
-      - mongo_data:/data/db
+      - ./data/mongodb:/data/db
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: password
@@ -45,7 +46,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ./data/qdrant:/qdrant/storage
     restart: always
 
   metmuseum-feeder:
@@ -128,8 +129,3 @@ services:
       QDRANT_PORT: "6333"
       QDRANT_COLLECTION: "artworks"
     restart: always
-
-volumes:
-  neo4j_data:
-  mongo_data:
-  qdrant_data:
