@@ -6,11 +6,11 @@ import io
 import streamlit as st
 from PIL import Image
 
-from components import render_header, render_upload_prompt, render_logo_centered, render_error
-from constants import PRIMARY
-from image_utils import load_image_safe, resize_image, pil_to_bytes, prefetch_images_parallel
-from services import recommend_artworks
-from state import store_artwork
+from domain.constants import PRIMARY
+from application.usecases.services import recommend_artworks
+from ..components import render_header, render_upload_prompt, render_logo_centered, render_error
+from ..state import store_artwork
+from ...media.image_utils import load_image_safe, resize_image, pil_to_bytes, prefetch_images_parallel
 
 
 def view_upload() -> None:
@@ -72,7 +72,7 @@ def view_upload() -> None:
 
 def _run_recommendations(img_bytes: bytes) -> None:
     import random
-    from constants import SPINNER_MESSAGES
+    from domain.constants import SPINNER_MESSAGES
     with st.spinner(random.choice(SPINNER_MESSAGES)):
         try:
             results = recommend_artworks(img_bytes)

@@ -4,62 +4,14 @@ from collections import defaultdict
 
 import streamlit as st
 
-from components import render_header, render_error, similarity_pct
-from constants import PRIMARY, ICONS
-from image_utils import show_image_card, show_image_detail
-from services import get_artwork_details
-from state import get_cached_details, cache_details, get_artwork
-from view_results import open_artwork
+from domain.constants import PRIMARY, ICONS
+from ..components import similarity_pct
+from ..state import get_artwork
+from ...media.image_utils import show_image_card
+from .results import open_artwork
 
 
-def view_detail() -> None:
-    render_header(show_new_search=True)
-    art_id: str = st.session_state["selected_artwork"]
-
-    details = get_cached_details(art_id)
-    if details is None:
-        with st.spinner("Loading artwork details…"):
-            try:
-                details = get_artwork_details(art_id)
-                cache_details(art_id, details)
-            except Exception as e:
-                render_error(f"Could not load artwork details: {e}")
-                _back_button()
-                return
-
-    col_back, _ = st.columns([1, 4])
-    with col_back:
-        if st.button("← Back to Results", key="back_btn"):
-            st.session_state["selected_artwork"] = None
-            st.rerun()
-
-    st.write("")
-    col_img, col_info = st.columns([1, 1], gap="medium")
-
-    with col_img:
-        show_image_detail(details.get("image_url", ""))
-
-    with col_info:
-        _render_info(art_id, details)
-
-    st.markdown("<hr class='subtle-divider'>", unsafe_allow_html=True)
-
-    related = details.get("related_artworks", [])
-    if related:
-        st.markdown(
-            f"<div class='section-label'>{ICONS.get('link','')} Related Artworks — Navigate the Graph</div>",
-            unsafe_allow_html=True,
-        )
-        _render_related(related)
-    else:
-        st.markdown(
-            "<div style='font-size:0.8rem;color:#444;padding:0.5rem 0;'>"
-            "No related artworks found in the graph for this work.</div>",
-            unsafe_allow_html=True,
-        )
-
-
-def _render_info(art_id: str, details: dict) -> None:
+def render_info(art_id: str, details: dict) -> None:
     title             = details.get("title", "Untitled")
     artist            = details.get("artist", "Unknown Artist")
     year              = details.get("year", "")
@@ -124,7 +76,7 @@ def _render_info(art_id: str, details: dict) -> None:
             )
 
 
-def _render_related(related: list[dict]) -> None:
+def render_related(related: list[dict]) -> None:
     priority_order = ["Same Artist", "Same Movement", "Same Genre", "Same Technique", "Same Department", "Related"]
     groups = defaultdict(list)
     for artwork in related:
@@ -166,7 +118,7 @@ def _render_related(related: list[dict]) -> None:
                     open_artwork(artwork)
 
 
-def _back_button() -> None:
+def render_back_button() -> None:
     if st.button("← Back to Results"):
         st.session_state["selected_artwork"] = None
         st.rerun()

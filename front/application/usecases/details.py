@@ -1,27 +1,13 @@
 from __future__ import annotations
 
-import io
-import os
-from typing import Optional
-
-import torch
 import streamlit as st
-from PIL import Image
 
-from constants import ICONS
-from db import get_clip_model, get_mongo_db, get_qdrant, get_neo4j
-from image_utils import prefetch_images_parallel
-from queries import neo4j_metadata, neo4j_related
-
-
-def embed_image(image_bytes: bytes) -> list[float]:
-    model, preprocess = get_clip_model()
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    tensor = preprocess(img).unsqueeze(0)
-    with torch.no_grad():
-        vector = model.encode_image(tensor)
-    vector /= vector.norm(dim=-1, keepdim=True)
-    return vector.cpu().numpy().tolist()[0]
+from domain.constants import ICONS
+from infrastructure.adapters.graph.graph_query_adapter import Neo4jGraphQuery
+from infrastructure.adapters.media.image_utils import prefetch_images_parallel
+from infrastructure.adapters.mongo.artwork_repository import MongoArtworkRepository
+from infrastructure.ports.artwork_repository import ArtworkRepository
+from infrastructure.ports.graph_query import GraphQuery
 
 
 def doc_to_card(doc: dict) -> dict:
@@ -33,52 +19,6 @@ def doc_to_card(doc: dict) -> dict:
         "image_url":     doc.get("primaryImage") or doc.get("imageUrl", ""),
         "thumbnail_url": doc.get("primaryImageSmall") or doc.get("primaryImage") or doc.get("imageUrl", ""),
     }
-
-
-def recommend_artworks(uploaded_image: bytes) -> list[dict]:
-    qdrant     = get_qdrant()
-    db         = get_mongo_db()
-    collection = os.getenv("QDRANT_COLLECTION", "artworks")
-    vector     = embed_image(uploaded_image)
-
-    try:
-        hits = qdrant.search(collection_name=collection, query_vector=vector, limit=12, with_payload=True)
-    except AttributeError:
-        hits = qdrant.query_points(collection_name=collection, query=vector, limit=12, with_payload=True).points
-
-    results, seen_ids = [], set()
-    for hit in hits:
-        payload   = hit.payload or {}
-        object_id = (
-            payload.get("objectId") or payload.get("objectID")
-            or payload.get("id") or payload.get("mongo_id") or payload.get("title")
-        )
-        if object_id is None:
-            continue
-        try:
-            object_id = int(object_id)
-        except (ValueError, TypeError):
-            pass
-        if object_id in seen_ids:
-            continue
-        seen_ids.add(object_id)
-
-        doc = db.artworks.find_one({"objectId": object_id})
-        if not doc:
-            continue
-
-        results.append({
-            "id":               str(doc["objectId"]),
-            "title":            doc.get("title", "Untitled"),
-            "artist":           doc.get("artistDisplayName", "Unknown"),
-            "year":             doc.get("objectEndDate", ""),
-            "image_url":        doc.get("primaryImage") or doc.get("imageUrl", ""),
-            "thumbnail_url":    doc.get("primaryImageSmall") or doc.get("primaryImage") or doc.get("imageUrl", ""),
-            "medium":           doc.get("medium", ""),
-            "department":       doc.get("department", ""),
-            "similarity_score": hit.score,
-        })
-    return results
 
 
 def _fallback_explanation(doc: dict) -> list[str]:
@@ -102,9 +42,13 @@ def _fallback_explanation(doc: dict) -> list[str]:
     return parts
 
 
-def get_artwork_details(artwork_id: str) -> dict:
-    driver = get_neo4j()
-    db     = get_mongo_db()
+def get_artwork_details(
+    artwork_id: str,
+    repo: ArtworkRepository | None = None,
+    graph: GraphQuery | None = None,
+) -> dict:
+    repo = repo or MongoArtworkRepository()
+    graph = graph or Neo4jGraphQuery()
 
     try:
         query_id_int = int(artwork_id)
@@ -112,7 +56,7 @@ def get_artwork_details(artwork_id: str) -> dict:
         query_id_int = artwork_id
     query_id_str = str(artwork_id)
 
-    doc = db.artworks.find_one({"objectId": query_id_int})
+    doc = repo.find_by_object_id(query_id_int)
     if doc:
         base = {
             "id":            str(doc["objectId"]),
@@ -138,9 +82,7 @@ def get_artwork_details(artwork_id: str) -> dict:
     neo4j_ok = False
 
     try:
-        with driver.session() as session:
-            meta    = neo4j_metadata(session, query_id_str)
-            related = neo4j_related(session, query_id_str)
+        meta, related = graph.get_metadata_and_related(query_id_str)
 
         neo4j_ok    = True
         artist_name = meta["artist_name"] or base.get("artist", "Unknown")
@@ -174,7 +116,7 @@ def get_artwork_details(artwork_id: str) -> dict:
             rel_type_map = {oid: rtype for oid, rtype in related}
             rel_order    = {oid: i for i, oid in enumerate(rel_ids)}
             docs = sorted(
-                db.artworks.find({"objectId": {"$in": rel_ids}}).limit(15),
+                repo.find_by_object_ids(rel_ids, limit=15),
                 key=lambda d: rel_order.get(d["objectId"], 999),
             )
             for rel_doc in docs:
@@ -190,10 +132,7 @@ def get_artwork_details(artwork_id: str) -> dict:
         explanation_parts = _fallback_explanation(doc if doc else base)
 
     if not related_artworks and base.get("artist") and base["artist"] not in ("Unknown", "Unknown Artist"):
-        for rel_doc in db.artworks.find({
-            "artistDisplayName": base["artist"],
-            "objectId": {"$ne": query_id_int},
-        }).limit(6):
+        for rel_doc in repo.find_by_artist(base["artist"], exclude_object_id=query_id_int, limit=6):
             card = doc_to_card(rel_doc)
             card["relation_type"] = "Same Artist"
             related_artworks.append(card)

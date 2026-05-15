@@ -7,11 +7,11 @@ import random
 import streamlit as st
 from PIL import Image
 
-from components import render_header, render_error
-from constants import PRIMARY, SPINNER_MESSAGES
-from image_utils import resize_image, show_image_card
-from services import get_artwork_details
-from state import store_artwork, get_cached_details, cache_details, push_history
+from domain.constants import PRIMARY, SPINNER_MESSAGES
+from application.usecases.services import get_artwork_details
+from ..components import render_header, render_error
+from ..state import store_artwork, get_cached_details, cache_details, push_history
+from ...media.image_utils import resize_image, show_image_card
 
 
 def view_results() -> None:

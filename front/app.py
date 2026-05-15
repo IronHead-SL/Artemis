@@ -3,11 +3,11 @@ from __future__ import annotations
 from PIL import Image
 import streamlit as st
 
-from state import init_session_state
-from styles import inject_css
-from view_upload import view_upload
-from view_results import view_results
-from view_detail import view_detail
+from infrastructure.adapters.streamlit.state import init_session_state
+from infrastructure.adapters.streamlit.styles import inject_css
+from infrastructure.adapters.streamlit.views.upload import view_upload
+from infrastructure.adapters.streamlit.views.results import view_results
+from infrastructure.adapters.streamlit.views.detail import view_detail
 
 img = Image.open("artemis-logo.png")
 st.set_page_config(

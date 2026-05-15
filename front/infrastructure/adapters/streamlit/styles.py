@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import streamlit as st
-from constants import PRIMARY, ACCENT, BG_DARK, BG_CARD, BG_CARD2, TEXT_PRIMARY, TEXT_MUTED, BORDER
+from domain.constants import PRIMARY, ACCENT, BG_DARK, BG_CARD, BG_CARD2, TEXT_PRIMARY, TEXT_MUTED, BORDER
 
 GLOBAL_CSS = f"""
 <style>

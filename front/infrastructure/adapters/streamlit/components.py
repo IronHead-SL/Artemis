@@ -6,9 +6,9 @@ import io
 import streamlit as st
 from PIL import Image
 
-from constants import PRIMARY
-from image_utils import resize_image, pil_to_bytes, image_to_base64
-from state import reset_state
+from domain.constants import PRIMARY
+from ..media.image_utils import resize_image, pil_to_bytes, image_to_base64
+from .state import reset_state
 
 
 def render_header(show_new_search: bool = False) -> None:
